@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments (NOT our env/ dir — that's the gym environment)
+venv/
+.venv/
+stock-rl-env/
+../stock-rl-env/
+
+# Data caches (regenerated from yfinance / FRED)
+data/cache/
+
+# Model checkpoints (too large for GitHub, regenerate via train)
+policy/checkpoints/
+*.zip
+
+# Training logs
+tb_logs/
+
+# Per-run JSON results (kept in CSV; JSON has full daily returns, ~80KB each)
+results/runs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
