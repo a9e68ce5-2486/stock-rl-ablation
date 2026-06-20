@@ -156,13 +156,35 @@ case "$CMD" in
 
 Usage: ./run.sh <command>
 
-Commands:
-    train         Train PPO model (~10-20 min on M-series MPS)
-    test-data     Smoke test: fetch prices + compute features
-    test-env      Smoke test: gym env reset/step
-    tensorboard   Start TensorBoard at http://localhost:6006
-    shell         Drop into venv Python REPL
-    install <pkg> Install a package into the venv
+== 🤖 Scout Agent (Day 2 — stock screening) ==
+    scout-agent           ⭐ Top picks + LLM thesis (the agent)
+                            args: --top_k N --as_of YYYY-MM-DD
+    scout-picks           Top picks with feature bullets only (no LLM)
+    scout-walkforward     Walk-forward benchmark (truly out-of-sample)
+    scout-benchmarks      Benchmark cases (with leaky training)
+    scout-validate        Multi-seed AUC + top-K precision
+    scout-train           Train rally classifier
+    scout-features        Compute features for full universe
+    scout-label           Re-label rallies in universe
+    scout-analyze         Statistics on rally labels
+    scout-universe        Show universe (129 tickers)
+    scout-pipeline        Full pipeline: label → features → train
+    scout-thesis-test     Smoke test LLM thesis writer with mock features
+
+== 📊 RL Portfolio (Day 1 — exploration) ==
+    train                 Train PPO model (~10-20 min on M-series MPS)
+    train-eval            Train then auto-eval
+    eval                  Evaluate a saved model
+    ablation              Run ablation across configs (single-seed)
+    multi-seed            Multi-seed validation for a config
+    results               Print accumulated CSV results table
+    test-data             Smoke test: fetch prices + compute features
+    test-env              Smoke test: gym env reset/step
+    tensorboard           Start TensorBoard at http://localhost:6006
+
+== 🛠️ Misc ==
+    shell                 Drop into venv Python REPL
+    install <pkg>         Install a package into the venv
 
 Active venv: $VENV_DIR
 EOF
