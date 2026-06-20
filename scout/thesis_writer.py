@@ -99,7 +99,8 @@ def build_prompt(ticker: str, features: dict, score: float,
                  macro_indicators: str = "",
                  sector_etf: str = "",
                  sector_news: list[str] | None = None,
-                 earnings_summary: str = "") -> str:
+                 earnings_summary: str = "",
+                 chart_signals: str = "") -> str:
     news_block = ("**個股新聞**：\n" + "\n".join(f"- {h}" for h in news_headlines)
                   if news_headlines else "(無法取得最近新聞)")
 
@@ -117,9 +118,12 @@ def build_prompt(ticker: str, features: dict, score: float,
     earnings_block = (f"**財報日期**: {earnings_summary}\n\n"
                       if earnings_summary and not earnings_summary.startswith("(") else "")
 
+    chart_block = (f"**圖表型態分析**（MACD / Bollinger / 支撐壓力 / 趨勢 / K 棒）：\n{chart_signals}\n\n"
+                   if chart_signals else "")
+
     return f"""你是嚴謹的量化分析師。針對美股 **{ticker}**（價格 ${features.get('close', 0):.2f}，截至 {features.get('date_str', 'N/A')}），根據下方資料寫一份**簡短的投資論點**。
 
-{macro_block}{indicators_block}{sector_block}{earnings_block}{news_block}
+{macro_block}{indicators_block}{sector_block}{chart_block}{earnings_block}{news_block}
 
 技術面 features：
 - 模型 rally 機率分數: {score:.3f}（universe 中位數 ≈ 0.05，p95 ≈ 0.14）
@@ -173,7 +177,8 @@ def write_thesis(ticker: str, features: dict, score: float,
                  macro_brief: str = "",
                  macro_indicators: str = "",
                  include_sector_news: bool = True,
-                 include_earnings: bool = True) -> str:
+                 include_earnings: bool = True,
+                 include_chart: bool = True) -> str:
     """Generate a Chinese investment thesis using Groq."""
     api_key = _get_groq_key()
     if not api_key:
@@ -195,9 +200,22 @@ def write_thesis(ticker: str, features: dict, score: float,
         earnings_info = get_next_earnings(ticker)
         earnings_summary = format_earnings_summary(earnings_info)
 
+    chart_signals_text = ""
+    chart_bullets_extra: list[str] = []
+    chart_analysis_obj = {}
+    if include_chart:
+        from scout.chart_analysis import (
+            fetch_history, analyze_chart, signals_to_prompt_block, signals_to_bullets,
+        )
+        history = fetch_history(ticker, days=300)
+        if not history.empty:
+            chart_analysis_obj = analyze_chart(ticker, history)
+            chart_signals_text = signals_to_prompt_block(chart_analysis_obj)
+            chart_bullets_extra = signals_to_bullets(chart_analysis_obj)
+
     prompt = build_prompt(ticker, features, score, headlines, macro_brief,
                           macro_indicators, sector_etf, sector_news,
-                          earnings_summary)
+                          earnings_summary, chart_signals_text)
 
     try:
         response = requests.post(
@@ -232,8 +250,12 @@ def write_thesis(ticker: str, features: dict, score: float,
                 f"### 產業 {sector_etf} 新聞\n" + "\n".join(f"- {h}" for h in sector_news))
         if earnings_summary and not earnings_summary.startswith("("):
             evidence_blocks.append(f"### 財報日期\n{earnings_summary}")
+        if chart_signals_text:
+            evidence_blocks.append(f"### 圖表型態原始數據\n```\n{chart_signals_text}\n```")
         if evidence_blocks:
             thesis = thesis + "\n\n" + "\n\n".join(evidence_blocks)
+        # Attach chart bullets so picks_with_thesis can render them
+        thesis = thesis + "\n\n<!--CHART_BULLETS:" + "|".join(chart_bullets_extra) + "-->"
         return thesis
     except requests.Timeout:
         return "❌ Groq API timeout (>45s)"

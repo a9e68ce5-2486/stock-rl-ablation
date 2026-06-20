@@ -134,6 +134,11 @@ case "$CMD" in
         echo "📅 Next earnings lookup..."
         python3 scout/earnings_calendar.py "$@"
         ;;
+    scout-chart)
+        shift
+        echo "📊 Chart analysis (MACD/Bollinger/Trend/Candles)..."
+        python3 scout/chart_analysis.py "$@"
+        ;;
     scout-picks)
         shift
         echo "🦞 Generating today's picks..."

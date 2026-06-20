@@ -166,12 +166,26 @@ def main():
             elapsed = time.time() - t0
             print(f"   ✅ done in {elapsed:.1f}s")
 
+        # Extract chart bullets from hidden marker (added by thesis_writer)
+        chart_bullets_text = ""
+        if "<!--CHART_BULLETS:" in thesis:
+            start = thesis.index("<!--CHART_BULLETS:") + len("<!--CHART_BULLETS:")
+            end = thesis.index("-->", start)
+            raw = thesis[start:end].strip()
+            thesis = thesis[: thesis.index("<!--CHART_BULLETS:")].rstrip()
+            if raw:
+                chart_bullets_text = "\n".join(f"- {b}" for b in raw.split("|") if b)
+
         lines.append(f"## #{rank}  {ticker} — score {score:.4f}")
         lines.append(f"**Price**: ${price:.2f}  ")
         lines.append("")
-        lines.append("### 技術信號")
+        lines.append("### 技術信號（feature-based）")
         lines.append(bullet_text)
         lines.append("")
+        if chart_bullets_text:
+            lines.append("### 圖表型態信號（chart-based）")
+            lines.append(chart_bullets_text)
+            lines.append("")
         lines.append("### 投資論點 (LLM-generated)")
         lines.append(thesis)
         lines.append("")
