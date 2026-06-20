@@ -41,3 +41,4 @@ results/features.parquet
 # Jupyter
 .ipynb_checkpoints/
 results/picks_latest.md
+results/agent_report.md

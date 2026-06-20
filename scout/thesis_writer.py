@@ -1,0 +1,214 @@
+"""LLM-based investment thesis writer.
+
+Takes a stock pick's features + recent news → asks Groq Llama 3.3 70B
+to write a short Chinese investment thesis explaining why this stock
+might rally.
+
+Uses Groq's free tier (~$0 / month for daily picks).
+"""
+from __future__ import annotations
+import json
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+import requests
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+
+def _get_groq_key() -> str:
+    """Try env var first, then OpenClaw auth-profiles.json fallback."""
+    key = os.environ.get("GROQ_API_KEY", "").strip()
+    if key:
+        return key
+    # OpenClaw stores per-agent profiles
+    candidates = [
+        Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json",
+        Path.home() / ".openclaw" / "auth-profiles.json",
+    ]
+    for profile_path in candidates:
+        if not profile_path.exists():
+            continue
+        try:
+            with open(profile_path) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        # Try several shapes
+        candidates_obj = []
+        if isinstance(data, dict):
+            for v in data.values():
+                if isinstance(v, dict):
+                    candidates_obj.append(v)
+                elif isinstance(v, list):
+                    candidates_obj.extend(x for x in v if isinstance(x, dict))
+        elif isinstance(data, list):
+            candidates_obj.extend(x for x in data if isinstance(x, dict))
+        for prof in candidates_obj:
+            blob = json.dumps(prof, default=str)
+            if "groq" not in blob.lower():
+                continue
+            # Probe common key names
+            for kn in ("apiKey", "token", "api_key", "key", "secret"):
+                v = prof.get(kn)
+                if isinstance(v, str) and v.startswith("gsk_"):
+                    return v
+            # Walk nested dicts one level
+            for v in prof.values():
+                if isinstance(v, dict):
+                    for kn in ("apiKey", "token", "api_key", "key", "secret"):
+                        vv = v.get(kn)
+                        if isinstance(vv, str) and vv.startswith("gsk_"):
+                            return vv
+                if isinstance(v, str) and v.startswith("gsk_"):
+                    return v
+    return ""
+
+
+def fetch_news(ticker: str, max_items: int = 5) -> list[str]:
+    """Best-effort news fetch via yfinance. Returns short headline list."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        raw = getattr(t, "news", None) or []
+        headlines = []
+        for item in raw[:max_items]:
+            # Newer yfinance wraps in .content
+            content = item.get("content") if isinstance(item, dict) else None
+            if content:
+                title = content.get("title") or content.get("summary")
+                publisher = (content.get("provider") or {}).get("displayName", "")
+            else:
+                title = item.get("title", "") if isinstance(item, dict) else ""
+                publisher = item.get("publisher", "") if isinstance(item, dict) else ""
+            if title:
+                headlines.append(f"{title}" + (f" ({publisher})" if publisher else ""))
+        return headlines
+    except Exception:
+        return []
+
+
+def build_prompt(ticker: str, features: dict, score: float,
+                 news_headlines: list[str]) -> str:
+    news_block = ("最近新聞標題：\n" + "\n".join(f"- {h}" for h in news_headlines)
+                  if news_headlines else "(無法取得最近新聞)")
+
+    return f"""你是嚴謹的量化分析師。針對美股 **{ticker}**（價格 ${features.get('close', 0):.2f}，截至 {features.get('date_str', 'N/A')}），根據下方資料寫一份**簡短的投資論點**。
+
+{news_block}
+
+技術面 features：
+- 模型 rally 機率分數: {score:.3f}（universe 中位數 ≈ 0.05，p95 ≈ 0.14）
+- 距 52 週高點: {features.get('drawdown_52w', 0)*100:+.1f}%
+- 距 200 日 MA: {features.get('price_vs_ma200', 0)*100:+.1f}%
+- 3 個月報酬: {features.get('momentum_3m', 0)*100:+.1f}%
+- 6 個月報酬: {features.get('momentum_6m', 0)*100:+.1f}%
+- 12 個月報酬: {features.get('momentum_12m', 0)*100:+.1f}%
+- 60 日年化波動率: {features.get('vol_60d', 0)*100:.0f}%
+- 60 日波動率歷史百分位: {features.get('vol_60d_rank', 0):.2f}
+- 30 / 90 日成交量比: {features.get('volume_surge_30d', 1):.2f}×
+- RSI(14): {features.get('rsi_14', 50):.0f}
+- 對 SPY 3 個月超額報酬: {features.get('rs_vs_spy_3m', 0)*100:+.1f}%
+- 距上次 52w 新高: {int(features.get('days_since_high', 0))} 天
+
+**請用繁體中文輸出，依照下方格式（嚴格遵守）：**
+
+### 公司
+（**1 句話**敘述 {ticker} 主要業務、所在產業、規模）
+
+### 技術面解讀
+（**1 段**，4-6 句。把上面 features 翻譯成「目前股價處於什麼狀態」。例如：是否深度超賣？資金是否在 accumulate？相對大盤強弱如何？）
+
+### 為什麼可能 rally
+（**1 段**，4-6 句。具體催化劑：產業趨勢、財報、政策、新聞，或單純的技術反彈。**必須誠實提及主要風險**，例如：基本面不確定、產業逆風、流動性問題等）
+
+### 一句話結論
+（**1 句**結論 + 信心程度（高/中/低））
+
+注意：不確定的事情用「可能」「或許」，不要保證任何事。"""
+
+
+def write_thesis(ticker: str, features: dict, score: float,
+                 model: str = DEFAULT_MODEL,
+                 include_news: bool = True) -> str:
+    """Generate a Chinese investment thesis using Groq."""
+    api_key = _get_groq_key()
+    if not api_key:
+        return ("❌ Groq API key not found. Set GROQ_API_KEY env var:\n"
+                "  export GROQ_API_KEY='gsk_...'\n"
+                "Or log in via `openclaw models auth paste-api-key --provider groq`")
+
+    headlines = fetch_news(ticker, max_items=5) if include_news else []
+    prompt = build_prompt(ticker, features, score, headlines)
+
+    try:
+        response = requests.post(
+            GROQ_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system",
+                     "content": "你是嚴謹的量化分析師，誠實提及不確定性與風險。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": 700,
+                "temperature": 0.4,
+            },
+            timeout=45,
+        )
+        if response.status_code != 200:
+            return f"❌ Groq API error {response.status_code}: {response.text[:200]}"
+        data = response.json()
+        thesis = data["choices"][0]["message"]["content"]
+        # Append news as evidence at end
+        if headlines:
+            news_md = "\n\n### 用到的新聞 (yfinance)\n" + "\n".join(
+                f"- {h}" for h in headlines)
+            thesis = thesis + news_md
+        return thesis
+    except requests.Timeout:
+        return "❌ Groq API timeout (>45s)"
+    except Exception as e:
+        return f"❌ Groq API error: {e}"
+
+
+def main():
+    """Quick smoke test: write thesis for one ticker with mock features."""
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ticker", default="MU")
+    args = parser.parse_args()
+
+    # Mock features that look like a deep-value bottom
+    mock = {
+        "date_str": "2026-05-29",
+        "close": 95.5,
+        "drawdown_52w": -0.32,
+        "price_vs_ma200": -0.12,
+        "momentum_3m": -0.18,
+        "momentum_6m": -0.05,
+        "momentum_12m": 0.10,
+        "vol_60d": 0.45,
+        "vol_60d_rank": 0.65,
+        "volume_surge_30d": 1.4,
+        "rsi_14": 28,
+        "rs_vs_spy_3m": -0.15,
+        "days_since_high": 180,
+    }
+
+    print(f"🦞 Writing thesis for {args.ticker} (mock features)...\n")
+    thesis = write_thesis(args.ticker, mock, score=0.42)
+    print(thesis)
+
+
+if __name__ == "__main__":
+    main()

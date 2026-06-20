@@ -109,6 +109,16 @@ case "$CMD" in
         echo "🔬 Walk-forward benchmark (truly out-of-sample)..."
         python3 scout/benchmark_walkforward.py
         ;;
+    scout-agent)
+        shift
+        echo "🤖 Scout agent: picks + LLM thesis..."
+        python3 scout/picks_with_thesis.py "$@"
+        ;;
+    scout-thesis-test)
+        shift
+        echo "🦞 Smoke test thesis writer..."
+        python3 scout/thesis_writer.py "$@"
+        ;;
     scout-picks)
         shift
         echo "🦞 Generating today's picks..."
