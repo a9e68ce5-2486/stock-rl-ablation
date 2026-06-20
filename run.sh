@@ -82,6 +82,21 @@ case "$CMD" in
         echo "📊 Analyzing rally labels..."
         python3 scout/analyze_rallies.py
         ;;
+    scout-features)
+        shift
+        echo "🧮 Computing features..."
+        python3 scout/compute_features.py "$@"
+        ;;
+    scout-train)
+        echo "🏋️  Training rally classifier..."
+        python3 scout/train_classifier.py
+        ;;
+    scout-pipeline)
+        echo "🦞 Full scout pipeline..."
+        python3 scout/label_rallies.py && \
+        python3 scout/compute_features.py && \
+        python3 scout/train_classifier.py
+        ;;
     test-data)
         echo "📦 Testing data pipeline..."
         python3 data/fetch_prices.py

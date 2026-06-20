@@ -27,6 +27,9 @@ tb_logs/
 # Per-run JSON results (kept in CSV; JSON has full daily returns, ~80KB each)
 results/runs/
 
+# Features (regenerable from scout/compute_features.py, ~5MB)
+results/features.parquet
+
 # OS / editor
 .DS_Store
 .idea/
