@@ -124,6 +124,16 @@ case "$CMD" in
         echo "🌍 Macro context briefing..."
         python3 scout/macro_context.py "$@"
         ;;
+    scout-sector)
+        shift
+        echo "🏭 Sector news lookup..."
+        python3 scout/sector_news.py "$@"
+        ;;
+    scout-earnings)
+        shift
+        echo "📅 Next earnings lookup..."
+        python3 scout/earnings_calendar.py "$@"
+        ;;
     scout-picks)
         shift
         echo "🦞 Generating today's picks..."

@@ -32,6 +32,64 @@ BROAD_SOURCES = [
     ("TLT", "債券 / 利率 / 通膨"),
 ]
 
+# Quantitative macro indicators (yfinance tickers, no extra API key needed)
+QUANT_INDICATORS = [
+    ("^TNX", "10y Treasury yield"),
+    ("^VIX", "VIX (volatility)"),
+    ("DX-Y.NYB", "Dollar Index"),
+    ("GC=F", "Gold futures"),
+    ("CL=F", "Crude oil futures"),
+    ("BTC-USD", "Bitcoin"),
+]
+
+
+def get_macro_indicators() -> dict:
+    """Fetch current values of key macro indicators via yfinance."""
+    import yfinance as yf
+    out = {}
+    for ticker, label in QUANT_INDICATORS:
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="5d")
+            if hist.empty or "Close" not in hist.columns:
+                continue
+            current = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[0])
+            change_pct = (current - prev) / prev * 100 if prev else 0
+            out[ticker] = {
+                "label": label,
+                "value": current,
+                "5d_change_pct": change_pct,
+            }
+        except Exception:
+            continue
+    return out
+
+
+def format_indicators(indicators: dict) -> str:
+    """Human-readable summary of indicators for the prompt."""
+    if not indicators:
+        return ""
+    lines = ["量化指標（過去 5 天）："]
+    for ticker, info in indicators.items():
+        v = info["value"]
+        c = info["5d_change_pct"]
+        arrow = "↗" if c > 0.5 else ("↘" if c < -0.5 else "→")
+        if ticker == "^TNX":
+            lines.append(f"- 10年期美債殖利率: {v:.2f}% {arrow} ({c:+.1f}% 5d)")
+        elif ticker == "^VIX":
+            level = "高恐慌" if v > 30 else ("正常" if v > 15 else "低波動")
+            lines.append(f"- VIX 恐慌指數: {v:.1f} ({level}) {arrow}")
+        elif ticker == "DX-Y.NYB":
+            lines.append(f"- 美元指數 DXY: {v:.2f} {arrow} ({c:+.1f}% 5d)")
+        elif ticker == "GC=F":
+            lines.append(f"- 黃金 (期貨): ${v:.0f} {arrow} ({c:+.1f}% 5d)")
+        elif ticker == "CL=F":
+            lines.append(f"- 原油 WTI: ${v:.1f} {arrow} ({c:+.1f}% 5d)")
+        elif ticker == "BTC-USD":
+            lines.append(f"- 比特幣: ${v:,.0f} {arrow} ({c:+.1f}% 5d)")
+    return "\n".join(lines)
+
 
 def _read_cache():
     if not CACHE_PATH.exists():
@@ -79,21 +137,23 @@ def _fetch_headlines() -> tuple[list[str], list[str]]:
     return headlines, sources_used
 
 
-def _summarize(headlines: list[str], api_key: str) -> str:
+def _summarize(headlines: list[str], indicators: dict, api_key: str) -> str:
     """Ask LLM to summarize the macro environment."""
-    prompt = """以下是當前美股市場、半導體產業、債券利率的最新新聞標題（從 SPY / QQQ / SMH / TLT 抓取）：
+    quant_block = format_indicators(indicators)
+    prompt = (("以下是當前**量化指標**：\n\n" + quant_block + "\n\n") if quant_block else "") + \
+"""以下是當前美股市場、半導體產業、債券利率的最新新聞標題（從 SPY / QQQ / SMH / TLT 抓取）：
 
 """ + "\n".join(f"- {h}" for h in headlines) + """
 
-請以**繁體中文** 200 字以內，總結當前**總體環境**，必須涵蓋：
+請以**繁體中文** 250 字以內，總結當前**總體環境**，必須涵蓋（**整合量化指標 + 新聞 narrative**）：
 
-1. **總體情緒**：市場目前 risk-on 還是 risk-off？什麼主導？
-2. **利率 / 通膨**：聯準會走向、市場預期
-3. **科技 / 半導體 narrative**：AI、晶片、HBM 等
-4. **地緣 / 政策**：中美、選舉、關稅、能源
-5. **近期關鍵 catalyst**：即將到來的事件（FOMC、財報、政策日）
+1. **總體情緒**：market risk-on / risk-off？看 VIX + SPY 新聞
+2. **利率 / 通膨**：10y yield 趨勢 + Fed narrative
+3. **科技 / 半導體 narrative**：AI、晶片、HBM、半導體週期
+4. **地緣 / 政策 / 商品**：中美、選舉、關稅、油價/金價/美元走勢
+5. **近期關鍵 catalyst**：FOMC、財報季、政策日
 
-格式：**5 個 bullet points**，每點一行，每行 30-50 字。
+格式：**5 個 bullet points**，每點一行，每行 40-60 字（要顯式提到量化指標值）。
 不要保證未來，誠實寫不確定。"""
 
     response = requests.post(
@@ -136,16 +196,31 @@ def get_macro_brief(force_refresh: bool = False) -> dict:
         }
 
     headlines, sources = _fetch_headlines()
-    if not headlines:
+    indicators = get_macro_indicators()
+    if not headlines and not indicators:
         return {
             "ts": time.time(),
-            "brief": "(macro brief unavailable: could not fetch ETF news)",
+            "brief": "(macro brief unavailable: could not fetch news or indicators)",
             "sources_used": [],
+            "indicators": {},
         }
 
-    brief = _summarize(headlines, api_key)
-    _write_cache(brief, sources)
-    return {"ts": time.time(), "brief": brief, "sources_used": sources}
+    brief = _summarize(headlines, indicators, api_key)
+    out = {
+        "ts": time.time(),
+        "brief": brief,
+        "sources_used": sources,
+        "indicators": indicators,
+        "indicators_formatted": format_indicators(indicators),
+    }
+    _write_cache_full(out)
+    return out
+
+
+def _write_cache_full(payload: dict):
+    """Write full payload (brief + indicators)."""
+    CACHE_PATH.parent.mkdir(exist_ok=True, parents=True)
+    CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 
 def main():

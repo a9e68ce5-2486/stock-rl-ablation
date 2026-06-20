@@ -95,16 +95,31 @@ def fetch_news(ticker: str, max_items: int = 5) -> list[str]:
 
 def build_prompt(ticker: str, features: dict, score: float,
                  news_headlines: list[str],
-                 macro_brief: str = "") -> str:
-    news_block = ("最近新聞標題：\n" + "\n".join(f"- {h}" for h in news_headlines)
+                 macro_brief: str = "",
+                 macro_indicators: str = "",
+                 sector_etf: str = "",
+                 sector_news: list[str] | None = None,
+                 earnings_summary: str = "") -> str:
+    news_block = ("**個股新聞**：\n" + "\n".join(f"- {h}" for h in news_headlines)
                   if news_headlines else "(無法取得最近新聞)")
 
-    macro_block = (f"當前總體環境（請納入考量）：\n{macro_brief}\n\n"
+    macro_block = (f"**當前總體環境**（請納入考量）：\n{macro_brief}\n\n"
                    if macro_brief and not macro_brief.startswith("(") else "")
+
+    indicators_block = (f"**量化指標即時值**：\n{macro_indicators}\n\n"
+                        if macro_indicators else "")
+
+    sector_block = ""
+    if sector_etf and sector_news:
+        sector_block = (f"**{ticker} 的產業 ETF ({sector_etf}) 新聞**：\n"
+                        + "\n".join(f"- {h}" for h in sector_news) + "\n\n")
+
+    earnings_block = (f"**財報日期**: {earnings_summary}\n\n"
+                      if earnings_summary and not earnings_summary.startswith("(") else "")
 
     return f"""你是嚴謹的量化分析師。針對美股 **{ticker}**（價格 ${features.get('close', 0):.2f}，截至 {features.get('date_str', 'N/A')}），根據下方資料寫一份**簡短的投資論點**。
 
-{macro_block}{news_block}
+{macro_block}{indicators_block}{sector_block}{earnings_block}{news_block}
 
 技術面 features：
 - 模型 rally 機率分數: {score:.3f}（universe 中位數 ≈ 0.05，p95 ≈ 0.14）
@@ -155,7 +170,10 @@ def build_prompt(ticker: str, features: dict, score: float,
 def write_thesis(ticker: str, features: dict, score: float,
                  model: str = DEFAULT_MODEL,
                  include_news: bool = True,
-                 macro_brief: str = "") -> str:
+                 macro_brief: str = "",
+                 macro_indicators: str = "",
+                 include_sector_news: bool = True,
+                 include_earnings: bool = True) -> str:
     """Generate a Chinese investment thesis using Groq."""
     api_key = _get_groq_key()
     if not api_key:
@@ -164,7 +182,22 @@ def write_thesis(ticker: str, features: dict, score: float,
                 "Or log in via `openclaw models auth paste-api-key --provider groq`")
 
     headlines = fetch_news(ticker, max_items=5) if include_news else []
-    prompt = build_prompt(ticker, features, score, headlines, macro_brief)
+
+    sector_etf = ""
+    sector_news: list[str] = []
+    if include_sector_news:
+        from scout.sector_news import fetch_sector_news
+        sector_etf, sector_news = fetch_sector_news(ticker, max_items=4)
+
+    earnings_summary = ""
+    if include_earnings:
+        from scout.earnings_calendar import get_next_earnings, format_earnings_summary
+        earnings_info = get_next_earnings(ticker)
+        earnings_summary = format_earnings_summary(earnings_info)
+
+    prompt = build_prompt(ticker, features, score, headlines, macro_brief,
+                          macro_indicators, sector_etf, sector_news,
+                          earnings_summary)
 
     try:
         response = requests.post(
@@ -189,11 +222,18 @@ def write_thesis(ticker: str, features: dict, score: float,
             return f"❌ Groq API error {response.status_code}: {response.text[:200]}"
         data = response.json()
         thesis = data["choices"][0]["message"]["content"]
-        # Append news as evidence at end
+        # Append evidence at end (ticker + sector news + earnings)
+        evidence_blocks = []
         if headlines:
-            news_md = "\n\n### 用到的新聞 (yfinance)\n" + "\n".join(
-                f"- {h}" for h in headlines)
-            thesis = thesis + news_md
+            evidence_blocks.append(
+                "### 個股新聞 (yfinance)\n" + "\n".join(f"- {h}" for h in headlines))
+        if sector_news:
+            evidence_blocks.append(
+                f"### 產業 {sector_etf} 新聞\n" + "\n".join(f"- {h}" for h in sector_news))
+        if earnings_summary and not earnings_summary.startswith("("):
+            evidence_blocks.append(f"### 財報日期\n{earnings_summary}")
+        if evidence_blocks:
+            thesis = thesis + "\n\n" + "\n\n".join(evidence_blocks)
         return thesis
     except requests.Timeout:
         return "❌ Groq API timeout (>45s)"

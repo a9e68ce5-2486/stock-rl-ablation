@@ -100,13 +100,16 @@ def main():
 
     # Fetch macro brief once (cached for 1h)
     if args.no_thesis:
-        macro_data = {"brief": "", "sources_used": []}
+        macro_data = {"brief": "", "sources_used": [], "indicators_formatted": ""}
     else:
-        print("\n🌍 Fetching macro context...")
+        print("\n🌍 Fetching macro context (qualitative + quantitative)...")
         macro_data = get_macro_brief()
-        print(f"   ({len(macro_data.get('brief', ''))} chars from "
-              f"{', '.join(macro_data.get('sources_used', []))})")
+        n_chars = len(macro_data.get('brief', ''))
+        n_inds = len(macro_data.get('indicators', {}))
+        print(f"   ({n_chars} chars from {', '.join(macro_data.get('sources_used', []))}, "
+              f"{n_inds} quant indicators)")
     macro_brief = macro_data.get("brief", "")
+    macro_indicators = macro_data.get("indicators_formatted", "")
 
     # Markdown report
     out_path = PROJECT_ROOT / args.out
@@ -125,9 +128,14 @@ def main():
     lines.append("")
     if macro_brief and not macro_brief.startswith("("):
         lines.append("## 🌍 當前總體環境")
-        lines.append(f"_(來源: SPY / QQQ / SMH / TLT 新聞 → Groq summary, "
-                     f"cached 1h)_")
+        lines.append(f"_(來源: SPY/QQQ/SMH/TLT 新聞 + ^TNX/^VIX/DXY/Gold/Oil/BTC "
+                     f"指標 → Groq summary, cached 1h)_")
         lines.append("")
+        if macro_indicators:
+            lines.append("```")
+            lines.append(macro_indicators)
+            lines.append("```")
+            lines.append("")
         lines.append(macro_brief)
         lines.append("")
     lines.append("---")
@@ -153,7 +161,8 @@ def main():
                 **{c: float(row[c]) for c in FEATURE_COLS},
             }
             thesis = write_thesis(ticker, features_dict, score,
-                                  macro_brief=macro_brief)
+                                  macro_brief=macro_brief,
+                                  macro_indicators=macro_indicators)
             elapsed = time.time() - t0
             print(f"   ✅ done in {elapsed:.1f}s")
 
