@@ -24,12 +24,43 @@ from scout.benchmark_cases import explain_features
 from scout.thesis_writer import write_thesis
 
 
+def filter_depressed(latest):
+    """Keep only picks with multiple 'depressed bottom' signals.
+
+    A truly undiscovered MU/LITE-style candidate should have at least
+    2 of these 5 conditions:
+      - Drawdown from 52w high  < -20%
+      - RSI < 45 (not yet rallying hard)
+      - Price below MA200 by ≥ 5%
+      - Underperforming SPY in last 3 months
+      - Negative 3m or 6m momentum (capitulation)
+
+    This filters out 'already-rallying continuation' picks (like CIEN
+    above MA200 by 106%) that aren't actually 'undiscovered'.
+    """
+    latest = latest.copy()
+    deep_dd = latest["drawdown_52w"] < -0.20
+    cool_rsi = latest["rsi_14"] < 45
+    below_ma = latest["price_vs_ma200"] < -0.05
+    underperf = latest["rs_vs_spy_3m"] < 0.0
+    capitulation = (latest["momentum_3m"] < -0.10) | (latest["momentum_6m"] < -0.15)
+
+    n_signals = (deep_dd.astype(int) + cool_rsi.astype(int) + below_ma.astype(int)
+                 + underperf.astype(int) + capitulation.astype(int))
+    latest["n_depressed_signals"] = n_signals
+    return latest[n_signals >= 2].copy()
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--top_k", type=int, default=5)
     parser.add_argument("--as_of", default=None)
     parser.add_argument("--out", default="results/agent_report.md")
+    parser.add_argument("--mode", default="discover",
+                        choices=["discover", "raw"],
+                        help="discover = only depressed-bottom candidates (default), "
+                             "raw = no filter (top scores regardless of mode)")
     parser.add_argument("--no_thesis", action="store_true",
                         help="skip LLM thesis (debug)")
     args = parser.parse_args()
@@ -45,14 +76,25 @@ def main():
     recent = df[df["date"] <= as_of].copy()
     latest = recent.sort_values("date").groupby("ticker").tail(1)
     latest["score"] = model.predict_proba(latest[FEATURE_COLS].values)[:, 1]
-    top = latest.sort_values("score", ascending=False).head(args.top_k)
 
     universe_median = float(latest["score"].median())
     universe_p95 = float(latest["score"].quantile(0.95))
 
+    if args.mode == "discover":
+        filtered = filter_depressed(latest)
+        n_filtered = len(filtered)
+        top = filtered.sort_values("score", ascending=False).head(args.top_k)
+        print(f"\n🔍 Mode: discover (depressed-bottom candidates only)")
+        print(f"   Universe = {len(latest)} → after filter = {n_filtered} candidates")
+    else:
+        top = latest.sort_values("score", ascending=False).head(args.top_k)
+        print(f"\n🎯 Mode: raw (no filter)")
+
     print(f"\n🎯 Top {args.top_k} picks:")
     for _, r in top.iterrows():
-        print(f"  {r['ticker']:6s}  score={r['score']:.4f}  ${r['close']:>7.2f}")
+        n_sigs = r.get("n_depressed_signals", "-")
+        print(f"  {r['ticker']:6s}  score={r['score']:.4f}  "
+              f"${r['close']:>7.2f}  signals={n_sigs}")
     print(f"\n  Universe score: median={universe_median:.4f}  p95={universe_p95:.4f}")
 
     # Markdown report
