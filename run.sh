@@ -144,6 +144,27 @@ case "$CMD" in
         echo "📡 Watchlist monitor: chart + buy/sell/hold..."
         python3 scout/watchlist.py "$@"
         ;;
+    daily-install)
+        shift
+        echo "⏰ Installing daily launchd job..."
+        bash scripts/install_daily.sh "$@"
+        ;;
+    daily-uninstall)
+        echo "🗑️  Uninstalling daily launchd job..."
+        bash scripts/uninstall_daily.sh
+        ;;
+    daily-test)
+        echo "🧪 Triggering daily run now..."
+        launchctl start com.victor.scout-daily 2>/dev/null && \
+            echo "✅ Triggered. Watch results/daily_logs/$(date +%Y-%m-%d).log for output."
+        ;;
+    daily-status)
+        echo "📋 Daily launchd status..."
+        launchctl list | grep scout-daily || echo "(not installed)"
+        echo ""
+        echo "Recent log files:"
+        ls -lh results/daily_logs/*.log 2>/dev/null | tail -5 || echo "  (none yet)"
+        ;;
     scout-picks)
         shift
         echo "🦞 Generating today's picks..."

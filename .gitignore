@@ -43,3 +43,5 @@ results/features.parquet
 results/picks_latest.md
 results/agent_report.md
 results/watchlist_report.md
+results/daily/
+results/daily_logs/
