@@ -139,6 +139,11 @@ case "$CMD" in
         echo "📊 Chart analysis (MACD/Bollinger/Trend/Candles)..."
         python3 scout/chart_analysis.py "$@"
         ;;
+    scout-watch)
+        shift
+        echo "📡 Watchlist monitor: chart + buy/sell/hold..."
+        python3 scout/watchlist.py "$@"
+        ;;
     scout-picks)
         shift
         echo "🦞 Generating today's picks..."

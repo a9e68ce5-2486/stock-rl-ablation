@@ -16,7 +16,7 @@ SECTOR_ETF = {
     **{t: "SMH" for t in [
         "MU", "AMD", "MRVL", "ON", "AVGO", "QCOM", "LSCC", "MCHP", "MPWR",
         "AMAT", "LRCX", "KLAC", "AMKR", "CRUS", "POWI", "SWKS", "QRVO",
-        "INTC", "ACMR", "WDC", "STX",
+        "INTC", "ACMR", "WDC", "STX", "NVDA", "TSM", "ASML", "ARM",
     ]},
     # Optical / Network / Communication
     **{t: "PAVE" for t in ["LITE", "CIEN", "INFN", "ANET", "NTGR"]},
