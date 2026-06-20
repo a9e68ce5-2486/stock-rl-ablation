@@ -164,6 +164,67 @@ case "$CMD" in
         echo ""
         echo "Recent log files:"
         ls -lh results/daily_logs/*.log 2>/dev/null | tail -5 || echo "  (none yet)"
+        echo ""
+        echo "Recent reports:"
+        ls -lh results/daily/*.md 2>/dev/null | tail -10 || echo "  (none yet)"
+        ;;
+    daily-today)
+        TODAY="$(date +%Y-%m-%d)"
+        echo "📂 Opening today's reports..."
+        AGENT_FILE="results/daily/agent_${TODAY}.md"
+        WATCH_FILE="results/daily/watchlist_${TODAY}.md"
+        if [ -f "$AGENT_FILE" ]; then
+            open "$AGENT_FILE"
+        else
+            echo "  ⚠️  $AGENT_FILE not yet generated"
+        fi
+        if [ -f "$WATCH_FILE" ]; then
+            open "$WATCH_FILE"
+        else
+            echo "  ⚠️  $WATCH_FILE not yet generated"
+        fi
+        ;;
+    daily-yesterday)
+        YDAY="$(date -v-1d +%Y-%m-%d)"
+        echo "📂 Opening yesterday's reports ($YDAY)..."
+        [ -f "results/daily/agent_${YDAY}.md" ] && open "results/daily/agent_${YDAY}.md"
+        [ -f "results/daily/watchlist_${YDAY}.md" ] && open "results/daily/watchlist_${YDAY}.md"
+        ;;
+    daily-list)
+        echo "📅 All daily reports:"
+        ls -lt results/daily/ 2>/dev/null | grep '\.md$' | head -30 || echo "  (none yet)"
+        ;;
+    daily-tail)
+        TODAY="$(date +%Y-%m-%d)"
+        LOGFILE="results/daily_logs/${TODAY}.log"
+        if [ -f "$LOGFILE" ]; then
+            echo "📜 Tailing $LOGFILE..."
+            tail -50 "$LOGFILE"
+        else
+            echo "  ⚠️ No log for today yet."
+            LATEST="$(ls -t results/daily_logs/*.log 2>/dev/null | head -1)"
+            [ -n "$LATEST" ] && echo "Latest log: $LATEST" && tail -30 "$LATEST"
+        fi
+        ;;
+    daily-peek)
+        # Quick text preview of today's picks without opening anything
+        TODAY="$(date +%Y-%m-%d)"
+        AGENT_FILE="results/daily/agent_${TODAY}.md"
+        WATCH_FILE="results/daily/watchlist_${TODAY}.md"
+        echo ""
+        if [ -f "$AGENT_FILE" ]; then
+            echo "═══════════════════════════════════════"
+            echo "🔍 DISCOVERY ($AGENT_FILE)"
+            echo "═══════════════════════════════════════"
+            grep -E "^## |^### 一句話結論" "$AGENT_FILE" | head -20
+        fi
+        echo ""
+        if [ -f "$WATCH_FILE" ]; then
+            echo "═══════════════════════════════════════"
+            echo "📡 WATCHLIST ($WATCH_FILE)"
+            echo "═══════════════════════════════════════"
+            grep -E "^## |^### 建議|Net signal score" "$WATCH_FILE" | head -30
+        fi
         ;;
     scout-picks)
         shift
@@ -227,6 +288,17 @@ Usage: ./run.sh <command>
     test-data             Smoke test: fetch prices + compute features
     test-env              Smoke test: gym env reset/step
     tensorboard           Start TensorBoard at http://localhost:6006
+
+== ⏰ Daily Automation ==
+    daily-install         Install macOS launchd job (default 08:00)
+    daily-uninstall       Remove the launchd job
+    daily-test            Trigger today's run NOW (for testing)
+    daily-status          Show launchd status + recent files
+    daily-today           ⭐ Open today's reports in default app
+    daily-yesterday       Open yesterday's reports
+    daily-list            List all daily reports (newest first)
+    daily-tail            tail last 50 lines of today's log
+    daily-peek            Quick text preview without opening files
 
 == 🛠️ Misc ==
     shell                 Drop into venv Python REPL
