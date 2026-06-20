@@ -49,6 +49,11 @@ cd "$PROJECT_ROOT"
         && WATCH_OK=1 || WATCH_OK=0
 
     echo ""
+    echo "🎨 Building HTML briefing..."
+    python3 scout/briefing.py --date "$DATE" \
+        && BRIEFING_OK=1 || BRIEFING_OK=0
+
+    echo ""
     echo "── Cleanup: removing reports older than 60 days ──"
     find "$REPORT_DIR" -type f -mtime +60 -delete
     find "$LOG_DIR" -type f -mtime +60 -delete
@@ -57,11 +62,22 @@ cd "$PROJECT_ROOT"
     echo "✅ Done at $(date +%H:%M:%S)"
 } >> "$LOG_FILE" 2>&1
 
+# Auto-open the HTML briefing in default browser (only if user is logged in / awake)
+if [ "${BRIEFING_OK:-0}" = "1" ]; then
+    BRIEFING_FILE="$REPORT_DIR/briefing_${DATE}.html"
+    if [ -f "$BRIEFING_FILE" ]; then
+        # Only open if there's an active user session (not just a launchd-only context)
+        if pgrep -x Finder >/dev/null 2>&1; then
+            open "$BRIEFING_FILE" 2>/dev/null || true
+        fi
+    fi
+fi
+
 # === Notify ===
 if command -v osascript >/dev/null 2>&1; then
     if [ "${AGENT_OK:-0}" = "1" ] && [ "${WATCH_OK:-0}" = "1" ]; then
-        TITLE="🦞 Scout — Daily ready"
-        MSG="$TOP_K picks + watchlist updated. Open results/daily/"
+        TITLE="🦞 Scout — Daily briefing ready"
+        MSG="$TOP_K picks + watchlist. Briefing opened in browser."
     else
         TITLE="🦞 Scout — Errors"
         MSG="See $LOG_FILE"

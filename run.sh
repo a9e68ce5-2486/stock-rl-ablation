@@ -170,19 +170,26 @@ case "$CMD" in
         ;;
     daily-today)
         TODAY="$(date +%Y-%m-%d)"
-        echo "📂 Opening today's reports..."
-        AGENT_FILE="results/daily/agent_${TODAY}.md"
-        WATCH_FILE="results/daily/watchlist_${TODAY}.md"
-        if [ -f "$AGENT_FILE" ]; then
-            open "$AGENT_FILE"
+        BRIEFING="results/daily/briefing_${TODAY}.html"
+        if [ -f "$BRIEFING" ]; then
+            echo "📂 Opening today's briefing in browser..."
+            open "$BRIEFING"
         else
-            echo "  ⚠️  $AGENT_FILE not yet generated"
+            echo "  ⚠️  $BRIEFING not yet generated"
+            echo "  Try: ./run.sh daily-test (run pipeline now) or wait for 08:00."
         fi
-        if [ -f "$WATCH_FILE" ]; then
-            open "$WATCH_FILE"
-        else
-            echo "  ⚠️  $WATCH_FILE not yet generated"
-        fi
+        ;;
+    daily-briefing)
+        TODAY="$(date +%Y-%m-%d)"
+        echo "🎨 (Re)building HTML briefing for $TODAY..."
+        python3 scout/briefing.py --date "$TODAY" && \
+            open "results/daily/briefing_${TODAY}.html"
+        ;;
+    daily-markdown)
+        TODAY="$(date +%Y-%m-%d)"
+        echo "📂 Opening raw markdown reports..."
+        [ -f "results/daily/agent_${TODAY}.md" ] && open "results/daily/agent_${TODAY}.md"
+        [ -f "results/daily/watchlist_${TODAY}.md" ] && open "results/daily/watchlist_${TODAY}.md"
         ;;
     daily-yesterday)
         YDAY="$(date -v-1d +%Y-%m-%d)"
