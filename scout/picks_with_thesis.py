@@ -22,6 +22,7 @@ import pandas as pd
 from scout.validate import load_split, train_one, FEATURE_COLS
 from scout.benchmark_cases import explain_features
 from scout.thesis_writer import write_thesis
+from scout.macro_context import get_macro_brief
 
 
 def filter_depressed(latest):
@@ -97,6 +98,16 @@ def main():
               f"${r['close']:>7.2f}  signals={n_sigs}")
     print(f"\n  Universe score: median={universe_median:.4f}  p95={universe_p95:.4f}")
 
+    # Fetch macro brief once (cached for 1h)
+    if args.no_thesis:
+        macro_data = {"brief": "", "sources_used": []}
+    else:
+        print("\n🌍 Fetching macro context...")
+        macro_data = get_macro_brief()
+        print(f"   ({len(macro_data.get('brief', ''))} chars from "
+              f"{', '.join(macro_data.get('sources_used', []))})")
+    macro_brief = macro_data.get("brief", "")
+
     # Markdown report
     out_path = PROJECT_ROOT / args.out
     out_path.parent.mkdir(exist_ok=True, parents=True)
@@ -106,12 +117,19 @@ def main():
     lines.append(f"Top {args.top_k} undiscovered rally candidates ranked by model score.")
     lines.append(f"Generated: {datetime.now():%Y-%m-%d %H:%M}  ")
     lines.append(f"Model: GradientBoostingClassifier (Test AUC 0.697 ± 0.003)  ")
-    lines.append(f"Thesis: Groq Llama 3.3 70B with yfinance news context")
+    lines.append(f"Thesis: Groq Llama 3.3 70B with yfinance ticker + macro news context")
     lines.append("")
     lines.append("**📊 Score distribution context**")
     lines.append(f"- Median (universe): {universe_median:.4f}")
     lines.append(f"- 95th percentile: {universe_p95:.4f}")
     lines.append("")
+    if macro_brief and not macro_brief.startswith("("):
+        lines.append("## 🌍 當前總體環境")
+        lines.append(f"_(來源: SPY / QQQ / SMH / TLT 新聞 → Groq summary, "
+                     f"cached 1h)_")
+        lines.append("")
+        lines.append(macro_brief)
+        lines.append("")
     lines.append("---")
     lines.append("")
 
@@ -134,7 +152,8 @@ def main():
                 "close": price,
                 **{c: float(row[c]) for c in FEATURE_COLS},
             }
-            thesis = write_thesis(ticker, features_dict, score)
+            thesis = write_thesis(ticker, features_dict, score,
+                                  macro_brief=macro_brief)
             elapsed = time.time() - t0
             print(f"   ✅ done in {elapsed:.1f}s")
 

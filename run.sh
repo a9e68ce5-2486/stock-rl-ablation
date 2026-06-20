@@ -119,6 +119,11 @@ case "$CMD" in
         echo "🦞 Smoke test thesis writer..."
         python3 scout/thesis_writer.py "$@"
         ;;
+    scout-macro)
+        shift
+        echo "🌍 Macro context briefing..."
+        python3 scout/macro_context.py "$@"
+        ;;
     scout-picks)
         shift
         echo "🦞 Generating today's picks..."

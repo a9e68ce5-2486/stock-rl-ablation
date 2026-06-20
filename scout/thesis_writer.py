@@ -94,13 +94,17 @@ def fetch_news(ticker: str, max_items: int = 5) -> list[str]:
 
 
 def build_prompt(ticker: str, features: dict, score: float,
-                 news_headlines: list[str]) -> str:
+                 news_headlines: list[str],
+                 macro_brief: str = "") -> str:
     news_block = ("最近新聞標題：\n" + "\n".join(f"- {h}" for h in news_headlines)
                   if news_headlines else "(無法取得最近新聞)")
 
+    macro_block = (f"當前總體環境（請納入考量）：\n{macro_brief}\n\n"
+                   if macro_brief and not macro_brief.startswith("(") else "")
+
     return f"""你是嚴謹的量化分析師。針對美股 **{ticker}**（價格 ${features.get('close', 0):.2f}，截至 {features.get('date_str', 'N/A')}），根據下方資料寫一份**簡短的投資論點**。
 
-{news_block}
+{macro_block}{news_block}
 
 技術面 features：
 - 模型 rally 機率分數: {score:.3f}（universe 中位數 ≈ 0.05，p95 ≈ 0.14）
@@ -125,7 +129,13 @@ def build_prompt(ticker: str, features: dict, score: float,
 （**1 段**，4-6 句。把上面 features 翻譯成「目前股價處於什麼狀態」。例如：是否深度超賣？資金是否在 accumulate？相對大盤強弱如何？）
 
 ### 為什麼可能 rally
-（**1 段**，4-6 句。具體催化劑：產業趨勢、財報、政策、新聞，或單純的技術反彈。**必須誠實提及主要風險**，例如：基本面不確定、產業逆風、流動性問題等）
+（**1 段**，5-7 句。**必須結合上面的「當前總體環境」與本檔個股新聞**，具體說明：
+- 當前總體環境中**哪幾條** narrative 跟 {ticker} 直接相關？（例如：升息對科技股、AI capex 對半導體、中美關係對 EV、能源價格對太陽能）
+- 個股本身的催化劑：財報、產品上市、合作案、政策受益
+- **必須誠實提及主要風險**（基本面不確定、產業逆風、流動性、地緣風險等）
+
+不要只說「產業趨勢正面」這種空話，要具體說「**因為 X 總體 narrative + Y 個股新聞 = Z 可能催化股價**」。
+如果總體環境跟個股無關，要明說「目前總體環境跟 {ticker} 無直接關聯」。）
 
 ### 一句話結論
 （**1 句**結論 + 信心程度 + 評分理由）
@@ -144,7 +154,8 @@ def build_prompt(ticker: str, features: dict, score: float,
 
 def write_thesis(ticker: str, features: dict, score: float,
                  model: str = DEFAULT_MODEL,
-                 include_news: bool = True) -> str:
+                 include_news: bool = True,
+                 macro_brief: str = "") -> str:
     """Generate a Chinese investment thesis using Groq."""
     api_key = _get_groq_key()
     if not api_key:
@@ -153,7 +164,7 @@ def write_thesis(ticker: str, features: dict, score: float,
                 "Or log in via `openclaw models auth paste-api-key --provider groq`")
 
     headlines = fetch_news(ticker, max_items=5) if include_news else []
-    prompt = build_prompt(ticker, features, score, headlines)
+    prompt = build_prompt(ticker, features, score, headlines, macro_brief)
 
     try:
         response = requests.post(
