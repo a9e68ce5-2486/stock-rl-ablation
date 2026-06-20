@@ -105,6 +105,10 @@ case "$CMD" in
         echo "🏆 Running benchmark cases (MU + similar rallies)..."
         python3 scout/benchmark_cases.py
         ;;
+    scout-walkforward)
+        echo "🔬 Walk-forward benchmark (truly out-of-sample)..."
+        python3 scout/benchmark_walkforward.py
+        ;;
     scout-picks)
         shift
         echo "🦞 Generating today's picks..."
