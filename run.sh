@@ -69,6 +69,19 @@ case "$CMD" in
         echo "📋 Showing accumulated results..."
         python3 policy/results_io.py
         ;;
+    scout-universe)
+        echo "📋 Showing scout universe..."
+        python3 scout/fetch_universe.py
+        ;;
+    scout-label)
+        shift
+        echo "🔬 Labeling rallies across universe..."
+        python3 scout/label_rallies.py "$@"
+        ;;
+    scout-analyze)
+        echo "📊 Analyzing rally labels..."
+        python3 scout/analyze_rallies.py
+        ;;
     test-data)
         echo "📦 Testing data pipeline..."
         python3 data/fetch_prices.py

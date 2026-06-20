@@ -210,6 +210,66 @@ Key meta-finding: single-seed RL = unreliable. Confirmed first-hand.
 
 ---
 
+### 2026-06-20 — Day 2: Pivot to Scout (Rally Detection)
+
+#### Project goal reframe
+After Day 1 confirmed PPO + portfolio allocation cannot produce reliable alpha
+at this data scale, Victor refined the goal:
+- 想賺錢，但不必打贏大盤
+- 也不希望虧得比大盤多
+- 想找出像 "2025年 MU / LITE" 那種「未被發現的股票」
+- 評量標準：模型能在 MU 還是 $100 的時候 flag positive，不需抓到底部
+
+→ This is **stock screening / rally detection**, a supervised classification
+problem, NOT RL portfolio management. Major reframe.
+
+#### Scout architecture
+```
+scout/
+├── fetch_universe.py     # 129 mid-cap US stocks (curated, hard-coded)
+├── label_rallies.py      # Find 50%-in-180d rallies, label troughs
+├── analyze_rallies.py    # Statistics + benchmark case verification
+├── compute_features.py   # (next) — per-day technical features
+└── train_classifier.py   # (next) — GradientBoosting, eval on 2024+
+```
+
+Rally definition:
+- gain_threshold = 50%
+- window_days   = 180
+- min_gap_days  = 60 (no overlapping rallies)
+
+#### Step 1+2 result (rally labeling)
+**827 rallies labeled across 124 of 129 tickers in 2015-2024**.
+
+- Avg gain    : 107% (median 73%)
+- Avg duration: 198 days (median 222)
+- Distribution by year: even, with peaks in 2020 (147) and 2022 (117)
+- Test set (2024+): 41 rallies — adequate but small
+
+MU benchmark cases (7 historical rallies caught):
+- 2016-02-11 → 2016-09-27   $9.45 → $17.56   (85.8%)
+- 2016-11-03 → 2017-06-07   $16.21 → $31.70  (95.5%)
+- 2017-08-10 → 2018-03-20   $26.81 → $59.64  (122.4%)
+- 2018-12-24 → 2019-09-11   $28.30 → $49.23  (73.9%)
+- 2020-03-16 → 2020-11-27   $33.62 → $62.64  (86.3%)
+- 2022-09-26 → 2023-05-26   $47.95 → $72.99  (52.2%)
+- **2023-07-07 → 2024-03-22  $59.99 → $109.34 (82.3%)** ← Victor's target
+
+Other notable benchmarks caught: LITE (10 rallies), ENPH (12 including +485%),
+FSLR (10), AMD (8 including +326%).
+
+#### Key methodology note: Look-ahead bias is THE risk
+The biggest danger in this problem class:
+- Using current universe (survivorship bias)
+- Using current macro narratives to interpret 2015 data
+- Including features computed with future data (look-ahead)
+- Using "labels-derived" features (data leakage)
+
+For v0 we accept survivorship bias (curated universe) but must enforce
+strict point-in-time feature computation.
+
+---
+
 ## 📂 Files & artifacts
 
 ```
