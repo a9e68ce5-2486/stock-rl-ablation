@@ -97,6 +97,19 @@ case "$CMD" in
         python3 scout/compute_features.py && \
         python3 scout/train_classifier.py
         ;;
+    scout-validate)
+        echo "🔬 Multi-seed + top-K validation..."
+        python3 scout/validate.py
+        ;;
+    scout-benchmarks)
+        echo "🏆 Running benchmark cases (MU + similar rallies)..."
+        python3 scout/benchmark_cases.py
+        ;;
+    scout-picks)
+        shift
+        echo "🦞 Generating today's picks..."
+        python3 scout/picks_today.py "$@"
+        ;;
     test-data)
         echo "📦 Testing data pipeline..."
         python3 data/fetch_prices.py
