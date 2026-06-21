@@ -207,25 +207,16 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
     except IndexError:
         change_1d = change_5d = change_30d = 0
 
-    days_held = None
-    try:
-        pd_date = pd.Timestamp(pos.get("purchase_date", ""))
-        if pd.notna(pd_date):
-            days_held = (pd.Timestamp.now() - pd_date).days
-    except Exception:
-        pass
-
-    # Dividends per lot (cumulative — kept for total return calculation)
-    lots = pos.get("lots", [{"shares": shares,
-                             "avg_cost": avg_cost,
-                             "purchase_date": pos.get("purchase_date")}])
-    dividends, div_count = compute_dividends_per_lots(pos["ticker"], lots)
-    total_return_dollar = pl_dollar + dividends
-    total_return_pct = (total_return_dollar / cost_basis * 100) if cost_basis else 0
-
-    # NEW: Latest dividend snapshot (what user actually wants to see)
+    # Latest dividend snapshot (forward-looking — doesn't need purchase_date)
     div_snap = dividend_snapshot(pos["ticker"], shares=shares,
                                   current_price=current_price)
+
+    # Estimated annual dividend total (latest per-share × implied annual freq × shares)
+    latest = div_snap.get("latest", {})
+    freq = div_snap.get("frequency", {})
+    est_annual_per_share = (latest.get("per_share", 0)
+                            * freq.get("implied_per_year", 0))
+    est_annual_total = est_annual_per_share * shares
 
     return {
         "ticker": pos["ticker"],
@@ -236,39 +227,33 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
         "cost_basis": cost_basis,
         "pl_dollar": pl_dollar,
         "pl_pct": pl_pct,
-        "dividends_dollar": dividends,
-        "div_count": div_count,
-        "total_return_dollar": total_return_dollar,
-        "total_return_pct": total_return_pct,
-        "days_held": days_held,
+        "est_annual_dividend": est_annual_total,
+        "est_annual_per_share": est_annual_per_share,
         "change_1d": change_1d,
         "change_5d": change_5d,
         "change_30d": change_30d,
         "notes": pos.get("notes", ""),
-        "purchase_date": pos.get("purchase_date", ""),
         "lots": pos.get("lots", []),
-        # NEW: dividend snapshot
         "div_snapshot": div_snap,
     }
 
 
 def render_portfolio_summary(stats_list: list[dict], cash_usd: float = 0) -> str:
-    """Total portfolio value (incl. cash), total return (capital + dividends)."""
+    """Total portfolio value (incl. cash), capital P/L, est. annual dividend."""
     if not stats_list and cash_usd <= 0:
         return "_(no positions)_"
 
     total_equity_value = sum(s["current_value"] for s in stats_list)
     total_cost = sum(s["cost_basis"] for s in stats_list)
     total_pl = total_equity_value - total_cost
-    total_dividends = sum(s["dividends_dollar"] for s in stats_list)
-    total_return = total_pl + total_dividends
-    total_return_pct = (total_return / total_cost * 100) if total_cost else 0
+    total_pl_pct = (total_pl / total_cost * 100) if total_cost else 0
+    total_annual_div = sum(s["est_annual_dividend"] for s in stats_list)
     total_portfolio_value = total_equity_value + cash_usd
+    yield_on_cost = (total_annual_div / total_cost * 100) if total_cost else 0
 
-    sorted_return = sorted(stats_list,
-                           key=lambda x: x["total_return_pct"], reverse=True)
-    best = sorted_return[0] if sorted_return else None
-    worst = sorted_return[-1] if len(sorted_return) > 1 else None
+    sorted_pl = sorted(stats_list, key=lambda x: x["pl_pct"], reverse=True)
+    best = sorted_pl[0] if sorted_pl else None
+    worst = sorted_pl[-1] if len(sorted_pl) > 1 else None
 
     lines = []
     lines.append(f"**總部位**: {len(stats_list)} 檔 + 現金 ${cash_usd:.2f}")
@@ -276,21 +261,18 @@ def render_portfolio_summary(stats_list: list[dict], cash_usd: float = 0) -> str
                  f"(股票 ${total_equity_value:,.2f} + 現金 ${cash_usd:.2f})")
     lines.append(f"**總成本**: ${total_cost:,.2f}")
     pl_s = "+" if total_pl >= 0 else ""
-    div_s = "+" if total_dividends >= 0 else ""
-    tr_s = "+" if total_return >= 0 else ""
     lines.append(f"**未實現損益（價差）**: {pl_s}${total_pl:,.2f} "
-                 f"({pl_s}{(total_pl/total_cost*100) if total_cost else 0:.2f}%)")
-    lines.append(f"**累積配息**: {div_s}${total_dividends:,.2f}")
-    lines.append(f"**總報酬（價差 + 配息）**: **{tr_s}${total_return:,.2f}**  "
-                 f"(**{tr_s}{total_return_pct:.2f}%**)")
+                 f"({pl_s}{total_pl_pct:.2f}%)")
+    lines.append(f"**預估年配息**: ${total_annual_div:,.2f} "
+                 f"(成本殖利率 {yield_on_cost:.2f}%)")
     if best:
         lines.append(f"\n**最佳**: {best['ticker']} "
-                     f"總報酬 {best['total_return_pct']:+.1f}% "
-                     f"({best['total_return_dollar']:+,.2f}$)")
+                     f"價差 {best['pl_pct']:+.1f}% "
+                     f"({best['pl_dollar']:+,.2f}$)")
     if worst and worst != best:
         lines.append(f"**最差**: {worst['ticker']} "
-                     f"總報酬 {worst['total_return_pct']:+.1f}% "
-                     f"({worst['total_return_dollar']:+,.2f}$)")
+                     f"價差 {worst['pl_pct']:+.1f}% "
+                     f"({worst['pl_dollar']:+,.2f}$)")
     return "\n".join(lines)
 
 
@@ -299,10 +281,10 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
                         sector_etf: str, sector_news: list[str],
                         earnings_summary: str, chart_block: str) -> list[str]:
     """Markdown for a single position."""
-    pl_emoji = "🟢" if stats["total_return_pct"] >= 0 else "🔴"
+    pl_emoji = "🟢" if stats["pl_pct"] >= 0 else "🔴"
     lines = []
     lines.append(f"## {stats['ticker']}  {rec['emoji']} **{rec['label']}**  "
-                 f"({pl_emoji} {stats['total_return_pct']:+.1f}%)")
+                 f"({pl_emoji} {stats['pl_pct']:+.1f}%)")
 
     # Position facts
     lines.append(f"**現價**: ${stats['current_price']:.2f}  "
@@ -311,24 +293,25 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
     lines.append(f"**現值**: ${stats['current_value']:,.2f}  "
                  f"|  **價差損益**: {stats['pl_dollar']:+,.2f}$ "
                  f"({stats['pl_pct']:+.1f}%)  ")
-    # NEW: latest dividend block (what user asked for)
+    # 配息資訊（最近一次 + 預估年配息）
     snap = stats.get("div_snapshot", {})
     latest = snap.get("latest", {})
     freq = snap.get("frequency", {})
     yld = snap.get("yield", {})
     if latest:
         lines.append("")
-        lines.append("### 💰 配息資訊（最近一次）")
+        lines.append("### 💰 配息資訊")
         lines.append(f"- **最近配息日**: {latest['date']} ({latest['days_ago']} 天前)")
-        lines.append(f"- **每股配息**: ${latest['per_share']:.4f}")
+        lines.append(f"- **每股配息（最近）**: ${latest['per_share']:.4f}")
         lines.append(f"- **本次入帳**: ${snap.get('latest_total_dollar', 0):.2f}")
         lines.append(f"- **配息頻率**: {freq.get('label', '未知')} "
                      f"(中位間隔 {freq.get('median_days') or '—'} 天, "
                      f"年約 {freq.get('implied_per_year', 0)} 次)")
+        lines.append(f"- **預估年配息（總）**: "
+                     f"${stats.get('est_annual_dividend', 0):,.2f} "
+                     f"(每股 ${stats.get('est_annual_per_share', 0):.4f})")
         if yld:
-            lines.append(f"- **年化殖利率**: {yld['current_yield_pct']:.2f}% "
-                         f"(年估 ${yld['annual_per_share']:.4f}/股)")
-        # Policy change history
+            lines.append(f"- **年化殖利率**: {yld['current_yield_pct']:.2f}%")
         changes = snap.get("policy_changes", [])
         if changes:
             recent_changes = changes[:3]
@@ -337,15 +320,6 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
                 emoji = "📈" if c["change_pct"] > 0 else "📉"
                 lines.append(f"  - {emoji} {c['date']}: ${c['from_per_share']:.4f} → "
                              f"${c['to_per_share']:.4f} ({c['change_pct']:+.1f}%)")
-        # Cumulative (kept for context)
-        if stats["dividends_dollar"] > 0:
-            lines.append(f"- **持有期間累積**: ${stats['dividends_dollar']:,.2f} "
-                         f"({stats['div_count']} 次)  |  "
-                         f"**含配息總報酬**: "
-                         f"{stats['total_return_dollar']:+,.2f}$ "
-                         f"({stats['total_return_pct']:+.1f}%)")
-    held = f"{stats['days_held']} 天" if stats["days_held"] is not None else "未填"
-    lines.append(f"**最早買進日**: {stats['purchase_date']} ({held}前)  ")
     lines.append(f"**1d**: {stats['change_1d']:+.2f}%  "
                  f"|  **5d**: {stats['change_5d']:+.2f}%  "
                  f"|  **30d**: {stats['change_30d']:+.2f}%  ")
@@ -356,18 +330,16 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
         lines.append("")
         lines.append("**持股分布**:")
         lines.append("")
-        lines.append("| Broker | 股數 | 均價 | 買進日 | Cost basis |")
-        lines.append("|--------|------|------|--------|------------|")
+        lines.append("| Broker | 股數 | 均價 | Cost basis |")
+        lines.append("|--------|------|------|------------|")
         for lot in lots:
             shares = float(lot.get("shares", 0))
             cost = float(lot.get("avg_cost", 0))
             broker = lot.get("broker", "—")
-            date_str = lot.get("purchase_date", "—")
             basis = shares * cost
-            lines.append(f"| {broker} | {shares:g} | ${cost:.2f} | "
-                         f"{date_str} | ${basis:,.2f} |")
+            lines.append(f"| {broker} | {shares:g} | ${cost:.2f} | ${basis:,.2f} |")
         lines.append(f"| **合計** | **{stats['shares']:g}** | "
-                     f"**${stats['avg_cost']:.2f}** | — | "
+                     f"**${stats['avg_cost']:.2f}** | "
                      f"**${stats['cost_basis']:,.2f}** |")
 
     if stats["notes"]:
@@ -493,11 +465,10 @@ def analyze_portfolio(out_path: Path, use_llm: bool = True):
                 macro_data.get("indicators_formatted", ""),
             )
 
-        div_str = (f"  +div ${stats['dividends_dollar']:.2f}"
-                   if stats['dividends_dollar'] > 0 else "")
+        annual_div_str = (f"  est. annual div ${stats['est_annual_dividend']:.2f}"
+                          if stats['est_annual_dividend'] > 0 else "")
         print(f"   ${stats['current_price']:.2f}  "
-              f"P/L {stats['pl_pct']:+.1f}%{div_str}  "
-              f"總報酬 {stats['total_return_pct']:+.1f}%  "
+              f"P/L {stats['pl_pct']:+.1f}%{annual_div_str}  "
               f"{rec['emoji']} {rec['label']}")
 
         all_blocks.append(render_position_card(
