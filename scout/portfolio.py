@@ -124,33 +124,54 @@ def aggregate_by_ticker(positions: list[dict]) -> list[dict]:
     return out
 
 
-def compute_dividends(ticker: str, purchase_date: str | None,
-                      shares: float) -> tuple[float, int]:
-    """Sum of dividends per share since purchase_date × shares held.
-
-    Simplification: assumes shares held constant from purchase to now.
-    For DRIP / partial sales this slightly mis-estimates.
-
-    Returns (total_dividends_dollar, number_of_payments).
-    """
-    if not purchase_date or shares <= 0:
+def _dividends_for_lot(divs_series: pd.Series, purchase_date: str | None,
+                       shares: float) -> tuple[float, int]:
+    """For one lot, compute dividends received since its purchase_date."""
+    if not purchase_date or shares <= 0 or divs_series is None or divs_series.empty:
         return 0.0, 0
+    start = pd.Timestamp(purchase_date)
+    if divs_series.index.tz is not None:
+        start = start.tz_localize(divs_series.index.tz)
+    relevant = divs_series[divs_series.index >= start]
+    if relevant.empty:
+        return 0.0, 0
+    return float(relevant.sum()) * shares, len(relevant)
+
+
+def compute_dividends_per_lots(ticker: str, lots: list[dict]) -> tuple[float, int]:
+    """Sum dividends per individual lot (correct when lots have different
+    purchase_dates). Fetches the dividend series once per ticker.
+
+    Returns (total_dividends_dollar, total_payment_count).
+    """
     try:
         import yfinance as yf
-        t = yf.Ticker(ticker)
-        divs = t.dividends
-        if divs is None or divs.empty:
-            return 0.0, 0
-        start = pd.Timestamp(purchase_date)
-        if divs.index.tz is not None:
-            start = start.tz_localize(divs.index.tz)
-        relevant = divs[divs.index >= start]
-        if relevant.empty:
-            return 0.0, 0
-        total_per_share = float(relevant.sum())
-        return total_per_share * shares, len(relevant)
+        divs = yf.Ticker(ticker).dividends
+    except Exception:
+        divs = None
+    total = 0.0
+    count = 0
+    for lot in lots:
+        s = float(lot.get("shares", 0))
+        d = lot.get("purchase_date")
+        amt, n = _dividends_for_lot(divs, d, s)
+        total += amt
+        count += n
+    return total, count
+
+
+def compute_dividends(ticker: str, purchase_date: str | None,
+                      shares: float) -> tuple[float, int]:
+    """Legacy single-lot helper (kept for backward compat).
+
+    Prefer compute_dividends_per_lots() when you have multiple lots.
+    """
+    try:
+        import yfinance as yf
+        divs = yf.Ticker(ticker).dividends
     except Exception:
         return 0.0, 0
+    return _dividends_for_lot(divs, purchase_date, shares)
 
 
 def init_positions_file():
@@ -192,9 +213,12 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
     except Exception:
         pass
 
-    # Dividends since purchase
-    dividends, div_count = compute_dividends(
-        pos["ticker"], pos.get("purchase_date"), shares)
+    # Dividends per lot (correct accounting when same ticker bought at
+    # different dates: each lot only earns dividends from its own buy date)
+    lots = pos.get("lots", [{"shares": shares,
+                             "avg_cost": avg_cost,
+                             "purchase_date": pos.get("purchase_date")}])
+    dividends, div_count = compute_dividends_per_lots(pos["ticker"], lots)
     total_return_dollar = pl_dollar + dividends
     total_return_pct = (total_return_dollar / cost_basis * 100) if cost_basis else 0
 
