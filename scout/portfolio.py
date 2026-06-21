@@ -521,15 +521,12 @@ def analyze_portfolio(out_path: Path, use_llm: bool = True):
     out_path.write_text("\n".join(lines))
     print(f"\n💾 Portfolio report saved → {out_path}")
 
-    # Append today's snapshot to Excel log
+    # Append today's snapshot to Excel log (only on trading days, called from
+    # run_daily.sh which already gates by is_trading_day.py)
     try:
-        spy_close = float(spy_hist["Close"].iloc[-1]) if not spy_hist.empty else None
-        log_info = append_daily_snapshot(all_stats, cash_usd=cash_usd,
-                                         spy_close=spy_close)
+        log_info = append_daily_snapshot(all_stats)
         print(f"📊 Excel log appended  → {log_info['log_path']}  "
-              f"({log_info['rows_appended']} 列)")
-        if log_info.get("daily_change_pct") is not None:
-            print(f"   今日 vs 昨日: {log_info['daily_change_pct']:+.2f}%")
+              f"({log_info['rows_appended']} 列新增, 累計 {log_info['total_rows']} 列)")
     except Exception as e:
         print(f"⚠️  Excel log error: {e}")
 
