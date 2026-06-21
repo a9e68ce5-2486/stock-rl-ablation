@@ -70,6 +70,67 @@ def extract_watch_summary(md_text: str) -> list[dict]:
     return items
 
 
+def extract_portfolio_summary(md_text: str) -> str:
+    """Pull the 投組總覽 block + a per-position quick table."""
+    # Get the summary block (between "## 投組總覽" and the next "## ...")
+    m = re.search(r"##\s+投組總覽\s*\n+(.+?)(?=\n##\s)", md_text, re.DOTALL)
+    summary = m.group(1).strip() if m else ""
+
+    # Get per-position headers like "## NVDA  🟢 **ACCUMULATE**  (🟢 +17.1%)"
+    rows = []
+    for m in re.finditer(
+        r"##\s+([A-Z]+)\s+([🟢🟡🔴⚪]+)\s+\*\*(\w+)\*\*\s+\(([🟢🔴])\s+([+-][\d.]+)%\)",
+        md_text):
+        ticker, emoji, tier, pl_emoji, pl = m.groups()
+        tail = md_text[m.end(): m.end() + 600]
+        price_m = re.search(r"\*\*現價\*\*:\s+\$([\d.,]+)", tail)
+        shares_m = re.search(r"\*\*持股\*\*:\s+([\d.]+)", tail)
+        cost_m = re.search(r"\*\*成本\*\*:\s+\$([\d.,]+)", tail)
+        value_m = re.search(r"\*\*現值\*\*:\s+\$([\d,.-]+)", tail)
+        dollar_m = re.search(r"\*\*損益\*\*:\s+([+-][\d,.-]+)\$", tail)
+        rows.append({
+            "ticker": ticker, "tier": tier, "emoji": emoji,
+            "pl_pct": pl, "pl_emoji": pl_emoji,
+            "price": price_m.group(1) if price_m else "?",
+            "shares": shares_m.group(1) if shares_m else "?",
+            "cost": cost_m.group(1) if cost_m else "?",
+            "value": value_m.group(1) if value_m else "?",
+            "dollar": dollar_m.group(1) if dollar_m else "?",
+        })
+    if not rows:
+        return f"<p>{summary.replace(chr(10), '<br>')}</p>"
+
+    # Render
+    trs = []
+    for r in rows:
+        pl_float = float(r["pl_pct"])
+        cls = "pos" if pl_float >= 0 else "neg"
+        trs.append(f"""
+        <tr>
+          <td class="ticker">{r['ticker']}</td>
+          <td class="tier-{r['tier']}">{r['emoji']} {r['tier']}</td>
+          <td>{r['shares']} sh</td>
+          <td>${r['cost']}</td>
+          <td>${r['price']}</td>
+          <td>${r['value']}</td>
+          <td class="{cls}">{r['dollar']}$</td>
+          <td class="{cls}">{r['pl_pct']}%</td>
+        </tr>""")
+
+    return f"""
+    <p>{summary.replace(chr(10), '<br>')}</p>
+    <table style="margin-top:16px;">
+      <thead>
+        <tr>
+          <th>Ticker</th><th>建議</th><th>持股</th>
+          <th>成本</th><th>現價</th><th>現值</th>
+          <th>損益 $</th><th>損益 %</th>
+        </tr>
+      </thead>
+      <tbody>{''.join(trs)}</tbody>
+    </table>"""
+
+
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -139,6 +200,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <h1>🦞 Scout Daily Briefing</h1>
 <div class="sub">{date} · 自動產生 · 非投資建議</div>
 
+{portfolio_block_card}
 <div class="card">
   <h2>📡 監看清單建議</h2>
   {watch_table}
@@ -148,6 +210,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <h2>🔍 今日候選（top {n_picks}）</h2>
   {picks_table}
 </div>
+
+{portfolio_details}
 
 <details>
   <summary>📡 完整監看報告 (watchlist)</summary>
@@ -258,18 +322,42 @@ def main():
     agent_md = agent_path.read_text() if agent_path.exists() else "_(報告不存在)_"
     watch_md = watch_path.read_text() if watch_path.exists() else "_(報告不存在)_"
 
+    # Optional portfolio
+    portfolio_path = DAILY_DIR / f"portfolio_{date_str}.md"
+    portfolio_md = ""
+    portfolio_summary_html = ""
+    if portfolio_path.exists():
+        portfolio_md = portfolio_path.read_text()
+        # Extract portfolio summary section ("## 投組總覽")
+        portfolio_summary_html = extract_portfolio_summary(portfolio_md)
+
     picks = extract_agent_summary(agent_md)
     watch_items = extract_watch_summary(watch_md)
 
     import json
+    portfolio_card = (f"""<div class="card">
+  <h2>📊 我的投組</h2>
+  {portfolio_summary_html}
+</div>""" if portfolio_summary_html else "")
+
+    portfolio_details = (f"""<details>
+  <summary>📊 完整投組報告 (portfolio)</summary>
+  <div class="md" id="portfolio-md"></div>
+</details>
+<script>
+document.getElementById('portfolio-md').innerHTML = marked.parse({json.dumps(portfolio_md, ensure_ascii=False)});
+</script>""" if portfolio_md else "")
+
     html = HTML_TEMPLATE.format(
         date=date_str,
         time=datetime.now().strftime("%H:%M"),
         n_picks=len(picks),
+        portfolio_block_card=portfolio_card,
         watch_table=build_watch_table(watch_items),
         picks_table=build_picks_table(picks),
         agent_json=json.dumps(agent_md, ensure_ascii=False),
         watch_json=json.dumps(watch_md, ensure_ascii=False),
+        portfolio_details=portfolio_details,
     )
 
     out_path = (Path(args.out) if args.out

@@ -144,6 +144,23 @@ case "$CMD" in
         echo "📡 Watchlist monitor: chart + buy/sell/hold..."
         python3 scout/watchlist.py "$@"
         ;;
+    portfolio)
+        shift
+        echo "📊 Portfolio monitor (your real positions)..."
+        python3 scout/portfolio.py "$@"
+        ;;
+    portfolio-init)
+        echo "📝 Creating positions.json template..."
+        python3 scout/portfolio.py --init
+        ;;
+    portfolio-edit)
+        FILE="results/positions.json"
+        if [ ! -f "$FILE" ]; then
+            python3 scout/portfolio.py --init
+        fi
+        echo "📝 Opening $FILE..."
+        open "$FILE"
+        ;;
     daily-install)
         shift
         echo "⏰ Installing daily launchd job..."

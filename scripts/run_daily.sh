@@ -48,6 +48,19 @@ cd "$PROJECT_ROOT"
         --out "results/daily/watchlist_${DATE}.md" \
         && WATCH_OK=1 || WATCH_OK=0
 
+    # Portfolio monitor — only if positions.json exists
+    PORTFOLIO_OK=0
+    if [ -f "results/positions.json" ]; then
+        echo ""
+        echo "📊 Portfolio (your real positions)..."
+        python3 scout/portfolio.py \
+            --out "results/daily/portfolio_${DATE}.md" \
+            && PORTFOLIO_OK=1
+    else
+        echo "ℹ️  No positions.json — skipping portfolio monitor."
+        echo "   To enable: ./run.sh portfolio-init"
+    fi
+
     echo ""
     echo "🎨 Building HTML briefing..."
     python3 scout/briefing.py --date "$DATE" \
