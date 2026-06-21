@@ -153,6 +153,16 @@ case "$CMD" in
         echo "📝 Creating positions.json template..."
         python3 scout/portfolio.py --init
         ;;
+    portfolio-events)
+        shift
+        echo "📅 Material events lookup..."
+        python3 scout/events.py "$@"
+        ;;
+    portfolio-dividend)
+        shift
+        echo "💰 Dividend snapshot..."
+        python3 scout/dividend_info.py "$@"
+        ;;
     portfolio-edit)
         FILE="results/positions.json"
         if [ ! -f "$FILE" ]; then

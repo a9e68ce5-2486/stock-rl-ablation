@@ -49,6 +49,8 @@ from scout.earnings_calendar import get_next_earnings, format_earnings_summary
 from scout.thesis_writer import fetch_news
 from scout.watchlist import compute_live_features, make_recommendation, write_recommendation_thesis
 from scout.macro_context import get_macro_brief
+from scout.dividend_info import dividend_snapshot
+from scout.events import get_events, events_to_bullets
 
 
 POSITIONS_PATH = PROJECT_ROOT / "results" / "positions.json"
@@ -213,14 +215,17 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
     except Exception:
         pass
 
-    # Dividends per lot (correct accounting when same ticker bought at
-    # different dates: each lot only earns dividends from its own buy date)
+    # Dividends per lot (cumulative — kept for total return calculation)
     lots = pos.get("lots", [{"shares": shares,
                              "avg_cost": avg_cost,
                              "purchase_date": pos.get("purchase_date")}])
     dividends, div_count = compute_dividends_per_lots(pos["ticker"], lots)
     total_return_dollar = pl_dollar + dividends
     total_return_pct = (total_return_dollar / cost_basis * 100) if cost_basis else 0
+
+    # NEW: Latest dividend snapshot (what user actually wants to see)
+    div_snap = dividend_snapshot(pos["ticker"], shares=shares,
+                                  current_price=current_price)
 
     return {
         "ticker": pos["ticker"],
@@ -242,6 +247,8 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
         "notes": pos.get("notes", ""),
         "purchase_date": pos.get("purchase_date", ""),
         "lots": pos.get("lots", []),
+        # NEW: dividend snapshot
+        "div_snapshot": div_snap,
     }
 
 
@@ -304,11 +311,39 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
     lines.append(f"**現值**: ${stats['current_value']:,.2f}  "
                  f"|  **價差損益**: {stats['pl_dollar']:+,.2f}$ "
                  f"({stats['pl_pct']:+.1f}%)  ")
-    if stats["dividends_dollar"] > 0:
-        lines.append(f"**累積配息**: ${stats['dividends_dollar']:,.2f} "
-                     f"({stats['div_count']} 次)  "
-                     f"|  **總報酬**: {stats['total_return_dollar']:+,.2f}$ "
-                     f"({stats['total_return_pct']:+.1f}%)  ")
+    # NEW: latest dividend block (what user asked for)
+    snap = stats.get("div_snapshot", {})
+    latest = snap.get("latest", {})
+    freq = snap.get("frequency", {})
+    yld = snap.get("yield", {})
+    if latest:
+        lines.append("")
+        lines.append("### 💰 配息資訊（最近一次）")
+        lines.append(f"- **最近配息日**: {latest['date']} ({latest['days_ago']} 天前)")
+        lines.append(f"- **每股配息**: ${latest['per_share']:.4f}")
+        lines.append(f"- **本次入帳**: ${snap.get('latest_total_dollar', 0):.2f}")
+        lines.append(f"- **配息頻率**: {freq.get('label', '未知')} "
+                     f"(中位間隔 {freq.get('median_days') or '—'} 天, "
+                     f"年約 {freq.get('implied_per_year', 0)} 次)")
+        if yld:
+            lines.append(f"- **年化殖利率**: {yld['current_yield_pct']:.2f}% "
+                         f"(年估 ${yld['annual_per_share']:.4f}/股)")
+        # Policy change history
+        changes = snap.get("policy_changes", [])
+        if changes:
+            recent_changes = changes[:3]
+            lines.append(f"- **配息政策變化**（近 {len(recent_changes)} 次）:")
+            for c in recent_changes:
+                emoji = "📈" if c["change_pct"] > 0 else "📉"
+                lines.append(f"  - {emoji} {c['date']}: ${c['from_per_share']:.4f} → "
+                             f"${c['to_per_share']:.4f} ({c['change_pct']:+.1f}%)")
+        # Cumulative (kept for context)
+        if stats["dividends_dollar"] > 0:
+            lines.append(f"- **持有期間累積**: ${stats['dividends_dollar']:,.2f} "
+                         f"({stats['div_count']} 次)  |  "
+                         f"**含配息總報酬**: "
+                         f"{stats['total_return_dollar']:+,.2f}$ "
+                         f"({stats['total_return_pct']:+.1f}%)")
     held = f"{stats['days_held']} 天" if stats["days_held"] is not None else "未填"
     lines.append(f"**最早買進日**: {stats['purchase_date']} ({held}前)  ")
     lines.append(f"**1d**: {stats['change_1d']:+.2f}%  "
@@ -362,6 +397,17 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
     else:
         lines.append("- (無顯著訊號)")
     lines.append("")
+
+    # NEW: Material events timeline
+    events = get_events(stats["ticker"])
+    if events:
+        bullets = events_to_bullets(events)
+        if bullets:
+            lines.append("")
+            lines.append("### 📅 大事件 (近期)")
+            for b in bullets:
+                lines.append(f"- {b}")
+            lines.append("")
 
     if rationale:
         lines.append("### 🤖 LLM 分析師建議")

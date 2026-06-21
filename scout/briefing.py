@@ -89,6 +89,10 @@ def extract_portfolio_summary(md_text: str) -> str:
         value_m = re.search(r"\*\*現值\*\*:\s+\$([\d,.-]+)", tail)
         pl_m = re.search(r"\*\*價差損益\*\*:\s+([+-][\d,.-]+)\$\s+\(([+-][\d.]+)%\)", tail)
         div_m = re.search(r"\*\*累積配息\*\*:\s+\$([\d.,]+)", tail)
+        # NEW: latest dividend per share + frequency
+        latest_div_m = re.search(r"\*\*每股配息\*\*:\s+\$([\d.]+)", tail)
+        freq_m = re.search(r"\*\*配息頻率\*\*:\s+([^\(\n]+)", tail)
+        yield_m = re.search(r"\*\*年化殖利率\*\*:\s+([\d.]+)%", tail)
         rows.append({
             "ticker": ticker, "tier": tier, "emoji": emoji,
             "total_return_pct": total_ret, "pl_emoji": pl_emoji,
@@ -99,6 +103,10 @@ def extract_portfolio_summary(md_text: str) -> str:
             "pl_dollar": pl_m.group(1) if pl_m else "0",
             "pl_pct": pl_m.group(2) if pl_m else "0",
             "dividends": div_m.group(1) if div_m else "0",
+            "latest_div_per_share": (latest_div_m.group(1)
+                                     if latest_div_m else "—"),
+            "frequency": (freq_m.group(1).strip() if freq_m else "—"),
+            "yield_pct": (yield_m.group(1) if yield_m else "—"),
         })
     if not rows:
         return f"<p>{summary.replace(chr(10), '<br>')}</p>"
@@ -120,7 +128,9 @@ def extract_portfolio_summary(md_text: str) -> str:
           <td>${r['price']}</td>
           <td>${r['value']}</td>
           <td class="{cls}">{r['pl_dollar']}$</td>
-          <td>${r['dividends']}</td>
+          <td>${r['latest_div_per_share']}</td>
+          <td>{r['frequency']}</td>
+          <td>{r['yield_pct']}%</td>
           <td class="{cls}"><strong>{r['total_return_pct']}%</strong></td>
         </tr>""")
 
@@ -131,7 +141,7 @@ def extract_portfolio_summary(md_text: str) -> str:
         <tr>
           <th>Ticker</th><th>建議</th><th>持股</th>
           <th>成本</th><th>現價</th><th>現值</th>
-          <th>價差</th><th>配息</th><th>總報酬 %</th>
+          <th>價差</th><th>每股配息</th><th>頻率</th><th>殖利率</th><th>總報酬 %</th>
         </tr>
       </thead>
       <tbody>{''.join(trs)}</tbody>
