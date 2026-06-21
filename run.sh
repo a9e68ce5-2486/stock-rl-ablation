@@ -163,6 +163,11 @@ case "$CMD" in
         echo "💰 Dividend snapshot..."
         python3 scout/dividend_info.py "$@"
         ;;
+    portfolio-targets)
+        shift
+        echo "🎯 Analyst targets + fair value..."
+        python3 scout/analyst_targets.py "$@"
+        ;;
     portfolio-edit)
         FILE="results/positions.json"
         if [ ! -f "$FILE" ]; then

@@ -93,6 +93,15 @@ def extract_portfolio_summary(md_text: str) -> str:
             r"\*\*預估年配息（總）\*\*:\s+\$([\d,.-]+)", tail)
         freq_m = re.search(r"\*\*配息頻率\*\*:\s+([^\(\n]+)", tail)
         yield_m = re.search(r"\*\*年化殖利率\*\*:\s+([\d.]+)%", tail)
+        # NEW: analyst target + fair value
+        target_m = re.search(
+            r"\*\*目標價（平均）\*\*:\s+\$([\d.]+)\s+\(upside ([+-]?[\d.]+)%\)",
+            tail)
+        rec_m = re.search(r"\*\*分析師評等\*\*:\s+(\w+)", tail)
+        pe_m = re.search(r"\*\*Forward P/E\*\*:\s+([\d.]+)", tail)
+        fv_m = re.search(
+            r"\*\*簡易 Fair Value\*\*[^\$]*\$([\d.]+)\s+\(相對現價 ([+-]?[\d.]+)%\)",
+            tail)
         rows.append({
             "ticker": ticker, "tier": tier, "emoji": emoji,
             "pl_pct": pl_pct, "pl_emoji": pl_emoji,
@@ -107,19 +116,35 @@ def extract_portfolio_summary(md_text: str) -> str:
                                  if annual_div_m else "—"),
             "frequency": (freq_m.group(1).strip() if freq_m else "—"),
             "yield_pct": (yield_m.group(1) if yield_m else "—"),
+            "target": (target_m.group(1) if target_m else "—"),
+            "upside": (target_m.group(2) if target_m else "—"),
+            "rec": (rec_m.group(1) if rec_m else "—"),
+            "fwd_pe": (pe_m.group(1) if pe_m else "—"),
+            "fair_value": (fv_m.group(1) if fv_m else "—"),
+            "fair_upside": (fv_m.group(2) if fv_m else "—"),
         })
     if not rows:
         return f"<p>{summary.replace(chr(10), '<br>')}</p>"
 
-    # Render
-    trs = []
+    # Render — split into two tables for readability
+    trs_pl = []
+    trs_div = []
+    trs_target = []
     for r in rows:
         try:
             pl_float = float(r["pl_pct"])
         except ValueError:
             pl_float = 0
         cls = "pos" if pl_float >= 0 else "neg"
-        trs.append(f"""
+
+        try:
+            upside_float = float(r["upside"])
+            ucls = "pos" if upside_float > 0 else "neg"
+        except ValueError:
+            ucls = ""
+
+        # Table 1: P/L
+        trs_pl.append(f"""
         <tr>
           <td class="ticker">{r['ticker']}</td>
           <td class="tier-{r['tier']}">{r['emoji']} {r['tier']}</td>
@@ -129,24 +154,68 @@ def extract_portfolio_summary(md_text: str) -> str:
           <td>${r['value']}</td>
           <td class="{cls}">{r['pl_dollar']}$</td>
           <td class="{cls}"><strong>{r['pl_pct']}%</strong></td>
+        </tr>""")
+
+        # Table 2: Dividend
+        trs_div.append(f"""
+        <tr>
+          <td class="ticker">{r['ticker']}</td>
           <td>${r['latest_div_per_share']}</td>
           <td>{r['frequency']}</td>
           <td>${r['annual_div_total']}</td>
           <td>{r['yield_pct']}%</td>
         </tr>""")
 
+        # Table 3: Targets / Fair Value
+        trs_target.append(f"""
+        <tr>
+          <td class="ticker">{r['ticker']}</td>
+          <td>${r['price']}</td>
+          <td>${r['target']}</td>
+          <td class="{ucls}"><strong>{r['upside']}%</strong></td>
+          <td>${r['fair_value']}</td>
+          <td>{r['fair_upside']}%</td>
+          <td>{r['fwd_pe']}</td>
+          <td>{r['rec'].upper()}</td>
+        </tr>""")
+
     return f"""
     <p>{summary.replace(chr(10), '<br>')}</p>
-    <table style="margin-top:16px;">
+
+    <h3 style="margin-top:24px;">損益</h3>
+    <table>
       <thead>
         <tr>
           <th>Ticker</th><th>建議</th><th>持股</th>
           <th>成本</th><th>現價</th><th>現值</th>
           <th>價差 $</th><th>價差 %</th>
-          <th>每股配息</th><th>頻率</th><th>預估年配息</th><th>殖利率</th>
         </tr>
       </thead>
-      <tbody>{''.join(trs)}</tbody>
+      <tbody>{''.join(trs_pl)}</tbody>
+    </table>
+
+    <h3 style="margin-top:24px;">配息</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>每股（最近）</th><th>頻率</th><th>預估年配息</th><th>殖利率</th>
+        </tr>
+      </thead>
+      <tbody>{''.join(trs_div)}</tbody>
+    </table>
+
+    <h3 style="margin-top:24px;">分析師目標價 / Fair Value</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Ticker</th><th>現價</th>
+          <th>目標價</th><th>Upside</th>
+          <th>Fair Value</th><th>FV vs 現價</th>
+          <th>Forward P/E</th><th>評等</th>
+        </tr>
+      </thead>
+      <tbody>{''.join(trs_target)}</tbody>
     </table>"""
 
 
@@ -233,11 +302,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 {portfolio_details}
 
 <details>
-  <summary>📡 完整監看報告 (watchlist)</summary>
-  <div class="md" id="watch-md"></div>
-</details>
-
-<details>
   <summary>🔍 完整候選報告 (discovery)</summary>
   <div class="md" id="agent-md"></div>
 </details>
@@ -250,9 +314,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 <script>
 const agentMd = {agent_json};
-const watchMd = {watch_json};
 document.getElementById('agent-md').innerHTML = marked.parse(agentMd);
-document.getElementById('watch-md').innerHTML = marked.parse(watchMd);
 </script>
 </body>
 </html>"""
@@ -375,7 +437,6 @@ document.getElementById('portfolio-md').innerHTML = marked.parse({json.dumps(por
         watch_table=build_watch_table(watch_items),
         picks_table=build_picks_table(picks),
         agent_json=json.dumps(agent_md, ensure_ascii=False),
-        watch_json=json.dumps(watch_md, ensure_ascii=False),
         portfolio_details=portfolio_details,
     )
 

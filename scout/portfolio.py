@@ -51,6 +51,8 @@ from scout.watchlist import compute_live_features, make_recommendation, write_re
 from scout.macro_context import get_macro_brief
 from scout.dividend_info import dividend_snapshot
 from scout.events import get_events, events_to_bullets
+from scout.analyst_targets import get_targets_snapshot, render_targets_bullets
+from scout.sector_news import get_sector_etf
 
 
 POSITIONS_PATH = PROJECT_ROOT / "results" / "positions.json"
@@ -211,6 +213,10 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
     div_snap = dividend_snapshot(pos["ticker"], shares=shares,
                                   current_price=current_price)
 
+    # Analyst targets + fair value snapshot
+    sector_etf = get_sector_etf(pos["ticker"]) or ""
+    targets_snap = get_targets_snapshot(pos["ticker"], current_price, sector_etf)
+
     # Estimated annual dividend total (latest per-share × implied annual freq × shares)
     latest = div_snap.get("latest", {})
     freq = div_snap.get("frequency", {})
@@ -235,6 +241,7 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
         "notes": pos.get("notes", ""),
         "lots": pos.get("lots", []),
         "div_snapshot": div_snap,
+        "targets": targets_snap,
     }
 
 
@@ -370,7 +377,18 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
         lines.append("- (無顯著訊號)")
     lines.append("")
 
-    # NEW: Material events timeline
+    # NEW: Analyst targets + Fair Value section
+    targets = stats.get("targets", {})
+    if targets:
+        target_bullets = render_targets_bullets(targets)
+        if target_bullets:
+            lines.append("")
+            lines.append("### 🎯 目標價 & Fair Value (分析師 + naive 估值)")
+            for b in target_bullets:
+                lines.append(f"- {b}")
+            lines.append("")
+
+    # Material events timeline
     events = get_events(stats["ticker"])
     if events:
         bullets = events_to_bullets(events)
