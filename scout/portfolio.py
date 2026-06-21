@@ -76,15 +76,81 @@ POSITIONS_TEMPLATE = {
 }
 
 
-def load_positions() -> list[dict]:
+def load_positions() -> tuple[list[dict], float]:
+    """Returns (positions, cash_usd)."""
     if not POSITIONS_PATH.exists():
-        return []
+        return [], 0.0
     try:
         data = json.loads(POSITIONS_PATH.read_text())
-        return data.get("positions", [])
+        return data.get("positions", []), float(data.get("cash_usd", 0))
     except Exception as e:
         print(f"⚠️  positions.json parse error: {e}")
-        return []
+        return [], 0.0
+
+
+def aggregate_by_ticker(positions: list[dict]) -> list[dict]:
+    """Combine multiple lots of same ticker into one aggregated position.
+
+    Returns a list of dicts each with: ticker, total_shares, weighted_avg_cost,
+    earliest_purchase_date, lots (list of original entries).
+    """
+    by_t = {}
+    for p in positions:
+        t = p["ticker"]
+        if t not in by_t:
+            by_t[t] = {
+                "ticker": t,
+                "shares": 0.0,
+                "total_cost": 0.0,
+                "lots": [],
+            }
+        agg = by_t[t]
+        s = float(p.get("shares", 0))
+        c = float(p.get("avg_cost", 0))
+        agg["shares"] += s
+        agg["total_cost"] += s * c
+        agg["lots"].append(p)
+
+    out = []
+    for agg in by_t.values():
+        agg["avg_cost"] = (agg["total_cost"] / agg["shares"]) if agg["shares"] else 0
+        dates = [p.get("purchase_date") for p in agg["lots"]
+                 if p.get("purchase_date")]
+        agg["purchase_date"] = min(dates) if dates else None
+        # Aggregate notes
+        notes = [p.get("notes", "") for p in agg["lots"] if p.get("notes")]
+        agg["notes"] = " | ".join(notes) if notes else ""
+        out.append(agg)
+    return out
+
+
+def compute_dividends(ticker: str, purchase_date: str | None,
+                      shares: float) -> tuple[float, int]:
+    """Sum of dividends per share since purchase_date × shares held.
+
+    Simplification: assumes shares held constant from purchase to now.
+    For DRIP / partial sales this slightly mis-estimates.
+
+    Returns (total_dividends_dollar, number_of_payments).
+    """
+    if not purchase_date or shares <= 0:
+        return 0.0, 0
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        divs = t.dividends
+        if divs is None or divs.empty:
+            return 0.0, 0
+        start = pd.Timestamp(purchase_date)
+        if divs.index.tz is not None:
+            start = start.tz_localize(divs.index.tz)
+        relevant = divs[divs.index >= start]
+        if relevant.empty:
+            return 0.0, 0
+        total_per_share = float(relevant.sum())
+        return total_per_share * shares, len(relevant)
+    except Exception:
+        return 0.0, 0
 
 
 def init_positions_file():
@@ -126,6 +192,12 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
     except Exception:
         pass
 
+    # Dividends since purchase
+    dividends, div_count = compute_dividends(
+        pos["ticker"], pos.get("purchase_date"), shares)
+    total_return_dollar = pl_dollar + dividends
+    total_return_pct = (total_return_dollar / cost_basis * 100) if cost_basis else 0
+
     return {
         "ticker": pos["ticker"],
         "shares": shares,
@@ -135,42 +207,59 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
         "cost_basis": cost_basis,
         "pl_dollar": pl_dollar,
         "pl_pct": pl_pct,
+        "dividends_dollar": dividends,
+        "div_count": div_count,
+        "total_return_dollar": total_return_dollar,
+        "total_return_pct": total_return_pct,
         "days_held": days_held,
         "change_1d": change_1d,
         "change_5d": change_5d,
         "change_30d": change_30d,
         "notes": pos.get("notes", ""),
         "purchase_date": pos.get("purchase_date", ""),
+        "lots": pos.get("lots", []),
     }
 
 
-def render_portfolio_summary(stats_list: list[dict]) -> str:
-    """Total portfolio value, total P/L, biggest winners/losers."""
-    if not stats_list:
+def render_portfolio_summary(stats_list: list[dict], cash_usd: float = 0) -> str:
+    """Total portfolio value (incl. cash), total return (capital + dividends)."""
+    if not stats_list and cash_usd <= 0:
         return "_(no positions)_"
 
-    total_value = sum(s["current_value"] for s in stats_list)
+    total_equity_value = sum(s["current_value"] for s in stats_list)
     total_cost = sum(s["cost_basis"] for s in stats_list)
-    total_pl = total_value - total_cost
-    total_pl_pct = (total_pl / total_cost * 100) if total_cost else 0
+    total_pl = total_equity_value - total_cost
+    total_dividends = sum(s["dividends_dollar"] for s in stats_list)
+    total_return = total_pl + total_dividends
+    total_return_pct = (total_return / total_cost * 100) if total_cost else 0
+    total_portfolio_value = total_equity_value + cash_usd
 
-    sorted_pl = sorted(stats_list, key=lambda x: x["pl_pct"], reverse=True)
-    best = sorted_pl[0] if sorted_pl else None
-    worst = sorted_pl[-1] if len(sorted_pl) > 1 else None
+    sorted_return = sorted(stats_list,
+                           key=lambda x: x["total_return_pct"], reverse=True)
+    best = sorted_return[0] if sorted_return else None
+    worst = sorted_return[-1] if len(sorted_return) > 1 else None
 
     lines = []
-    lines.append(f"**總部位**: {len(stats_list)} 檔")
-    lines.append(f"**現值**: ${total_value:,.0f}  ")
-    lines.append(f"**成本**: ${total_cost:,.0f}  ")
-    pl_sign = "+" if total_pl >= 0 else ""
-    lines.append(f"**未實現損益**: {pl_sign}${total_pl:,.0f}  "
-                 f"({pl_sign}{total_pl_pct:.1f}%)")
+    lines.append(f"**總部位**: {len(stats_list)} 檔 + 現金 ${cash_usd:.2f}")
+    lines.append(f"**投組現值**: ${total_portfolio_value:,.2f} "
+                 f"(股票 ${total_equity_value:,.2f} + 現金 ${cash_usd:.2f})")
+    lines.append(f"**總成本**: ${total_cost:,.2f}")
+    pl_s = "+" if total_pl >= 0 else ""
+    div_s = "+" if total_dividends >= 0 else ""
+    tr_s = "+" if total_return >= 0 else ""
+    lines.append(f"**未實現損益（價差）**: {pl_s}${total_pl:,.2f} "
+                 f"({pl_s}{(total_pl/total_cost*100) if total_cost else 0:.2f}%)")
+    lines.append(f"**累積配息**: {div_s}${total_dividends:,.2f}")
+    lines.append(f"**總報酬（價差 + 配息）**: **{tr_s}${total_return:,.2f}**  "
+                 f"(**{tr_s}{total_return_pct:.2f}%**)")
     if best:
-        lines.append(f"\n**最佳**: {best['ticker']} {best['pl_pct']:+.1f}% "
-                     f"({best['pl_dollar']:+,.0f}$)")
+        lines.append(f"\n**最佳**: {best['ticker']} "
+                     f"總報酬 {best['total_return_pct']:+.1f}% "
+                     f"({best['total_return_dollar']:+,.2f}$)")
     if worst and worst != best:
-        lines.append(f"**最差**: {worst['ticker']} {worst['pl_pct']:+.1f}% "
-                     f"({worst['pl_dollar']:+,.0f}$)")
+        lines.append(f"**最差**: {worst['ticker']} "
+                     f"總報酬 {worst['total_return_pct']:+.1f}% "
+                     f"({worst['total_return_dollar']:+,.2f}$)")
     return "\n".join(lines)
 
 
@@ -179,24 +268,51 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
                         sector_etf: str, sector_news: list[str],
                         earnings_summary: str, chart_block: str) -> list[str]:
     """Markdown for a single position."""
-    pl_emoji = "🟢" if stats["pl_pct"] >= 0 else "🔴"
+    pl_emoji = "🟢" if stats["total_return_pct"] >= 0 else "🔴"
     lines = []
     lines.append(f"## {stats['ticker']}  {rec['emoji']} **{rec['label']}**  "
-                 f"({pl_emoji} {stats['pl_pct']:+.1f}%)")
+                 f"({pl_emoji} {stats['total_return_pct']:+.1f}%)")
 
     # Position facts
     lines.append(f"**現價**: ${stats['current_price']:.2f}  "
                  f"|  **持股**: {stats['shares']:g}  "
-                 f"|  **成本**: ${stats['avg_cost']:.2f}  ")
-    lines.append(f"**現值**: ${stats['current_value']:,.0f}  "
-                 f"|  **損益**: {stats['pl_dollar']:+,.0f}$  ")
+                 f"|  **加權均價**: ${stats['avg_cost']:.2f}  ")
+    lines.append(f"**現值**: ${stats['current_value']:,.2f}  "
+                 f"|  **價差損益**: {stats['pl_dollar']:+,.2f}$ "
+                 f"({stats['pl_pct']:+.1f}%)  ")
+    if stats["dividends_dollar"] > 0:
+        lines.append(f"**累積配息**: ${stats['dividends_dollar']:,.2f} "
+                     f"({stats['div_count']} 次)  "
+                     f"|  **總報酬**: {stats['total_return_dollar']:+,.2f}$ "
+                     f"({stats['total_return_pct']:+.1f}%)  ")
     held = f"{stats['days_held']} 天" if stats["days_held"] is not None else "未填"
-    lines.append(f"**買進日**: {stats['purchase_date']} ({held}前)  ")
+    lines.append(f"**最早買進日**: {stats['purchase_date']} ({held}前)  ")
     lines.append(f"**1d**: {stats['change_1d']:+.2f}%  "
                  f"|  **5d**: {stats['change_5d']:+.2f}%  "
                  f"|  **30d**: {stats['change_30d']:+.2f}%  ")
+
+    # Lots breakdown
+    lots = stats.get("lots", [])
+    if len(lots) > 1:
+        lines.append("")
+        lines.append("**持股分布**:")
+        lines.append("")
+        lines.append("| Broker | 股數 | 均價 | 買進日 | Cost basis |")
+        lines.append("|--------|------|------|--------|------------|")
+        for lot in lots:
+            shares = float(lot.get("shares", 0))
+            cost = float(lot.get("avg_cost", 0))
+            broker = lot.get("broker", "—")
+            date_str = lot.get("purchase_date", "—")
+            basis = shares * cost
+            lines.append(f"| {broker} | {shares:g} | ${cost:.2f} | "
+                         f"{date_str} | ${basis:,.2f} |")
+        lines.append(f"| **合計** | **{stats['shares']:g}** | "
+                     f"**${stats['avg_cost']:.2f}** | — | "
+                     f"**${stats['cost_basis']:,.2f}** |")
+
     if stats["notes"]:
-        lines.append(f"_買進原因_: {stats['notes']}  ")
+        lines.append(f"\n_買進原因_: {stats['notes']}  ")
     lines.append(f"**Net signal score**: {rec['net_score']:+d}")
     lines.append("")
 
@@ -253,10 +369,15 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
 
 
 def analyze_portfolio(out_path: Path, use_llm: bool = True):
-    positions = load_positions()
-    if not positions:
+    raw_positions, cash_usd = load_positions()
+    if not raw_positions and cash_usd <= 0:
         print(f"⚠️  No positions found. Run with --init to create template.")
         return
+
+    # Combine multiple lots of same ticker
+    aggregated = aggregate_by_ticker(raw_positions)
+    print(f"📂 Loaded {len(raw_positions)} lots → {len(aggregated)} unique tickers + "
+          f"cash ${cash_usd:.2f}")
 
     print(f"📡 Fetching SPY benchmark...")
     spy_hist = fetch_history("SPY", days=400)
@@ -269,9 +390,10 @@ def analyze_portfolio(out_path: Path, use_llm: bool = True):
     all_stats = []
     all_blocks = []
 
-    for i, pos in enumerate(positions, start=1):
+    for i, pos in enumerate(aggregated, start=1):
         ticker = pos["ticker"]
-        print(f"\n📊 [{i}/{len(positions)}] Analyzing position: {ticker}...")
+        print(f"\n📊 [{i}/{len(aggregated)}] Analyzing position: {ticker} "
+              f"({len(pos['lots'])} lot{'s' if len(pos['lots']) > 1 else ''})...")
         hist = fetch_history(ticker, days=400)
         if hist.empty:
             print(f"  ⚠️  no data for {ticker}, skipping")
@@ -301,8 +423,11 @@ def analyze_portfolio(out_path: Path, use_llm: bool = True):
                 macro_data.get("indicators_formatted", ""),
             )
 
+        div_str = (f"  +div ${stats['dividends_dollar']:.2f}"
+                   if stats['dividends_dollar'] > 0 else "")
         print(f"   ${stats['current_price']:.2f}  "
-              f"P/L {stats['pl_pct']:+.1f}%  "
+              f"P/L {stats['pl_pct']:+.1f}%{div_str}  "
+              f"總報酬 {stats['total_return_pct']:+.1f}%  "
               f"{rec['emoji']} {rec['label']}")
 
         all_blocks.append(render_position_card(
@@ -317,7 +442,7 @@ def analyze_portfolio(out_path: Path, use_llm: bool = True):
     lines.append("⚠️ **以下為基於公開資料的技術分析，非投資建議。任何進出皆為使用者自行決定。**")
     lines.append("")
     lines.append("## 投組總覽")
-    lines.append(render_portfolio_summary(all_stats))
+    lines.append(render_portfolio_summary(all_stats, cash_usd))
     lines.append("")
     if macro_data.get("brief") and not macro_data["brief"].startswith("("):
         lines.append("## 🌍 當前總體環境")

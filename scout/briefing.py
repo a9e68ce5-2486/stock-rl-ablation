@@ -81,21 +81,24 @@ def extract_portfolio_summary(md_text: str) -> str:
     for m in re.finditer(
         r"##\s+([A-Z]+)\s+([🟢🟡🔴⚪]+)\s+\*\*(\w+)\*\*\s+\(([🟢🔴])\s+([+-][\d.]+)%\)",
         md_text):
-        ticker, emoji, tier, pl_emoji, pl = m.groups()
-        tail = md_text[m.end(): m.end() + 600]
+        ticker, emoji, tier, pl_emoji, total_ret = m.groups()
+        tail = md_text[m.end(): m.end() + 900]
         price_m = re.search(r"\*\*現價\*\*:\s+\$([\d.,]+)", tail)
         shares_m = re.search(r"\*\*持股\*\*:\s+([\d.]+)", tail)
-        cost_m = re.search(r"\*\*成本\*\*:\s+\$([\d.,]+)", tail)
+        cost_m = re.search(r"\*\*加權均價\*\*:\s+\$([\d.,]+)", tail)
         value_m = re.search(r"\*\*現值\*\*:\s+\$([\d,.-]+)", tail)
-        dollar_m = re.search(r"\*\*損益\*\*:\s+([+-][\d,.-]+)\$", tail)
+        pl_m = re.search(r"\*\*價差損益\*\*:\s+([+-][\d,.-]+)\$\s+\(([+-][\d.]+)%\)", tail)
+        div_m = re.search(r"\*\*累積配息\*\*:\s+\$([\d.,]+)", tail)
         rows.append({
             "ticker": ticker, "tier": tier, "emoji": emoji,
-            "pl_pct": pl, "pl_emoji": pl_emoji,
+            "total_return_pct": total_ret, "pl_emoji": pl_emoji,
             "price": price_m.group(1) if price_m else "?",
             "shares": shares_m.group(1) if shares_m else "?",
             "cost": cost_m.group(1) if cost_m else "?",
             "value": value_m.group(1) if value_m else "?",
-            "dollar": dollar_m.group(1) if dollar_m else "?",
+            "pl_dollar": pl_m.group(1) if pl_m else "0",
+            "pl_pct": pl_m.group(2) if pl_m else "0",
+            "dividends": div_m.group(1) if div_m else "0",
         })
     if not rows:
         return f"<p>{summary.replace(chr(10), '<br>')}</p>"
@@ -103,8 +106,11 @@ def extract_portfolio_summary(md_text: str) -> str:
     # Render
     trs = []
     for r in rows:
-        pl_float = float(r["pl_pct"])
-        cls = "pos" if pl_float >= 0 else "neg"
+        try:
+            tr_float = float(r["total_return_pct"])
+        except ValueError:
+            tr_float = 0
+        cls = "pos" if tr_float >= 0 else "neg"
         trs.append(f"""
         <tr>
           <td class="ticker">{r['ticker']}</td>
@@ -113,8 +119,9 @@ def extract_portfolio_summary(md_text: str) -> str:
           <td>${r['cost']}</td>
           <td>${r['price']}</td>
           <td>${r['value']}</td>
-          <td class="{cls}">{r['dollar']}$</td>
-          <td class="{cls}">{r['pl_pct']}%</td>
+          <td class="{cls}">{r['pl_dollar']}$</td>
+          <td>${r['dividends']}</td>
+          <td class="{cls}"><strong>{r['total_return_pct']}%</strong></td>
         </tr>""")
 
     return f"""
@@ -124,7 +131,7 @@ def extract_portfolio_summary(md_text: str) -> str:
         <tr>
           <th>Ticker</th><th>建議</th><th>持股</th>
           <th>成本</th><th>現價</th><th>現值</th>
-          <th>損益 $</th><th>損益 %</th>
+          <th>價差</th><th>配息</th><th>總報酬 %</th>
         </tr>
       </thead>
       <tbody>{''.join(trs)}</tbody>
