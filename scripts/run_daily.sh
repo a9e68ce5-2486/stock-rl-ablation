@@ -27,6 +27,13 @@ LOG_FILE="$LOG_DIR/${DATE}.log"
 source "$VENV_DIR/bin/activate"
 cd "$PROJECT_ROOT"
 
+# === Skip non-trading days (weekend + US holidays) ===
+if ! python3 scripts/is_trading_day.py >> "$LOG_FILE" 2>&1; then
+    echo "Skipped: not a trading day (see $LOG_FILE)"
+    osascript -e 'display notification "今天非美股交易日，跳過" with title "🦞 Scout"' 2>/dev/null || true
+    exit 0
+fi
+
 # === Run ===
 {
     echo ""

@@ -76,32 +76,35 @@ def extract_portfolio_summary(md_text: str) -> str:
     m = re.search(r"##\s+投組總覽\s*\n+(.+?)(?=\n##\s)", md_text, re.DOTALL)
     summary = m.group(1).strip() if m else ""
 
-    # Get per-position headers like "## NVDA  🟢 **ACCUMULATE**  (🟢 +17.1%)"
+    # Split into per-position sections (each starts with "## TICKER  emoji **TIER**")
+    section_re = re.compile(
+        r"##\s+([A-Z]+)\s+([🟢🟡🔴⚪]+)\s+\*\*(\w+)\*\*\s+\(([🟢🔴])\s+([+-][\d.]+)%\)")
     rows = []
-    for m in re.finditer(
-        r"##\s+([A-Z]+)\s+([🟢🟡🔴⚪]+)\s+\*\*(\w+)\*\*\s+\(([🟢🔴])\s+([+-][\d.]+)%\)",
-        md_text):
+    matches = list(section_re.finditer(md_text))
+    for i, m in enumerate(matches):
         ticker, emoji, tier, pl_emoji, pl_pct = m.groups()
-        tail = md_text[m.end(): m.end() + 900]
-        price_m = re.search(r"\*\*現價\*\*:\s+\$([\d.,]+)", tail)
-        shares_m = re.search(r"\*\*持股\*\*:\s+([\d.]+)", tail)
-        cost_m = re.search(r"\*\*加權均價\*\*:\s+\$([\d.,]+)", tail)
-        value_m = re.search(r"\*\*現值\*\*:\s+\$([\d,.-]+)", tail)
-        pl_m = re.search(r"\*\*價差損益\*\*:\s+([+-][\d,.-]+)\$", tail)
-        latest_div_m = re.search(r"\*\*每股配息（最近）\*\*:\s+\$([\d.]+)", tail)
+        # Section = from this header to the next ticker header (or EOF)
+        next_start = matches[i + 1].start() if i + 1 < len(matches) else len(md_text)
+        section = md_text[m.end():next_start]
+
+        price_m = re.search(r"\*\*現價\*\*:\s+\$([\d.,]+)", section)
+        shares_m = re.search(r"\*\*持股\*\*:\s+([\d.]+)", section)
+        cost_m = re.search(r"\*\*加權均價\*\*:\s+\$([\d.,]+)", section)
+        value_m = re.search(r"\*\*現值\*\*:\s+\$([\d,.-]+)", section)
+        pl_m = re.search(r"\*\*價差損益\*\*:\s+([+-][\d,.-]+)\$", section)
+        latest_div_m = re.search(r"\*\*每股配息（最近）\*\*:\s+\$([\d.]+)", section)
         annual_div_m = re.search(
-            r"\*\*預估年配息（總）\*\*:\s+\$([\d,.-]+)", tail)
-        freq_m = re.search(r"\*\*配息頻率\*\*:\s+([^\(\n]+)", tail)
-        yield_m = re.search(r"\*\*年化殖利率\*\*:\s+([\d.]+)%", tail)
-        # NEW: analyst target + fair value
+            r"\*\*預估年配息（總）\*\*:\s+\$([\d,.-]+)", section)
+        freq_m = re.search(r"\*\*配息頻率\*\*:\s+([^\(\n]+)", section)
+        yield_m = re.search(r"\*\*年化殖利率\*\*:\s+([\d.]+)%", section)
         target_m = re.search(
             r"\*\*目標價（平均）\*\*:\s+\$([\d.]+)\s+\(upside ([+-]?[\d.]+)%\)",
-            tail)
-        rec_m = re.search(r"\*\*分析師評等\*\*:\s+(\w+)", tail)
-        pe_m = re.search(r"\*\*Forward P/E\*\*:\s+([\d.]+)", tail)
+            section)
+        rec_m = re.search(r"\*\*分析師評等\*\*:\s+(\w+)", section)
+        pe_m = re.search(r"\*\*Forward P/E\*\*:\s+([\d.]+)", section)
         fv_m = re.search(
             r"\*\*簡易 Fair Value\*\*[^\$]*\$([\d.]+)\s+\(相對現價 ([+-]?[\d.]+)%\)",
-            tail)
+            section)
         rows.append({
             "ticker": ticker, "tier": tier, "emoji": emoji,
             "pl_pct": pl_pct, "pl_emoji": pl_emoji,

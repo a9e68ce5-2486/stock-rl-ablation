@@ -53,6 +53,7 @@ from scout.dividend_info import dividend_snapshot
 from scout.events import get_events, events_to_bullets
 from scout.analyst_targets import get_targets_snapshot, render_targets_bullets
 from scout.sector_news import get_sector_etf
+from scout.portfolio_log import append_daily_snapshot
 
 
 POSITIONS_PATH = PROJECT_ROOT / "results" / "positions.json"
@@ -519,6 +520,18 @@ def analyze_portfolio(out_path: Path, use_llm: bool = True):
     out_path.parent.mkdir(exist_ok=True, parents=True)
     out_path.write_text("\n".join(lines))
     print(f"\n💾 Portfolio report saved → {out_path}")
+
+    # Append today's snapshot to Excel log
+    try:
+        spy_close = float(spy_hist["Close"].iloc[-1]) if not spy_hist.empty else None
+        log_info = append_daily_snapshot(all_stats, cash_usd=cash_usd,
+                                         spy_close=spy_close)
+        print(f"📊 Excel log appended  → {log_info['log_path']}  "
+              f"({log_info['rows_appended']} 列)")
+        if log_info.get("daily_change_pct") is not None:
+            print(f"   今日 vs 昨日: {log_info['daily_change_pct']:+.2f}%")
+    except Exception as e:
+        print(f"⚠️  Excel log error: {e}")
 
 
 def main():

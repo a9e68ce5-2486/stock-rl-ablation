@@ -168,6 +168,15 @@ case "$CMD" in
         echo "🎯 Analyst targets + fair value..."
         python3 scout/analyst_targets.py "$@"
         ;;
+    portfolio-log)
+        echo "📊 Opening portfolio Excel log..."
+        FILE="results/portfolio_log.xlsx"
+        if [ ! -f "$FILE" ]; then
+            echo "  ⚠️  $FILE not yet created. Run ./run.sh portfolio first."
+        else
+            open "$FILE"
+        fi
+        ;;
     portfolio-edit)
         FILE="results/positions.json"
         if [ ! -f "$FILE" ]; then
