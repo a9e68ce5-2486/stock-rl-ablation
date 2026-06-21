@@ -158,8 +158,13 @@ case "$CMD" in
         if [ ! -f "$FILE" ]; then
             python3 scout/portfolio.py --init
         fi
-        echo "📝 Opening $FILE..."
-        open "$FILE"
+        echo "📝 Opening $FILE in a text editor..."
+        # Prefer VS Code if installed, else TextEdit (always editable)
+        if command -v code >/dev/null 2>&1; then
+            code "$FILE"
+        else
+            open -e "$FILE"
+        fi
         ;;
     daily-install)
         shift
