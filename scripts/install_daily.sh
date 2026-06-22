@@ -4,7 +4,7 @@
 
 set -e
 
-HOUR=8
+HOUR=9
 MINUTE=0
 LABEL="com.victor.scout-daily"
 

@@ -76,22 +76,28 @@ def extract_portfolio_summary(md_text: str) -> str:
     m = re.search(r"##\s+投組總覽\s*\n+(.+?)(?=\n##\s)", md_text, re.DOTALL)
     summary = m.group(1).strip() if m else ""
 
-    # Split into per-position sections (each starts with "## TICKER  emoji **TIER**")
+    # Split into per-position sections — accept optional flag emoji and
+    # both alphanumeric (US) + numeric.TW (Taiwan) ticker formats.
     section_re = re.compile(
-        r"##\s+([A-Z]+)\s+([🟢🟡🔴⚪]+)\s+\*\*(\w+)\*\*\s+\(([🟢🔴])\s+([+-][\d.]+)%\)")
+        r"##\s+(🇺🇸|🇹🇼)?\s*([0-9A-Z.]+)\s+([🟢🟡🔴⚪]+)"
+        r"\s+\*\*(\w+)\*\*\s+\(([🟢🔴])\s+([+-][\d.]+)%\)"
+    )
     rows = []
     matches = list(section_re.finditer(md_text))
     for i, m in enumerate(matches):
-        ticker, emoji, tier, pl_emoji, pl_pct = m.groups()
-        # Section = from this header to the next ticker header (or EOF)
+        flag, ticker, emoji, tier, pl_emoji, pl_pct = m.groups()
+        currency = "TWD" if flag == "🇹🇼" else "USD"
+        sym = "NT$" if currency == "TWD" else "$"
         next_start = matches[i + 1].start() if i + 1 < len(matches) else len(md_text)
         section = md_text[m.end():next_start]
 
-        price_m = re.search(r"\*\*現價\*\*:\s+\$([\d.,]+)", section)
+        # All money regexes now accept both $ and NT$
+        money = r"(?:NT)?\$"
+        price_m = re.search(rf"\*\*現價\*\*:\s+{money}([\d.,]+)", section)
         shares_m = re.search(r"\*\*持股\*\*:\s+([\d.]+)", section)
-        cost_m = re.search(r"\*\*加權均價\*\*:\s+\$([\d.,]+)", section)
-        value_m = re.search(r"\*\*現值\*\*:\s+\$([\d,.-]+)", section)
-        pl_m = re.search(r"\*\*價差損益\*\*:\s+([+-][\d,.-]+)\$", section)
+        cost_m = re.search(rf"\*\*加權均價\*\*:\s+{money}([\d.,]+)", section)
+        value_m = re.search(rf"\*\*現值\*\*:\s+{money}([\d,.-]+)", section)
+        pl_m = re.search(r"\*\*價差損益\*\*:\s+([+-][\d,.-]+)\s+(?:NT)?\$", section)
         latest_div_m = re.search(r"\*\*每股配息（最近）\*\*:\s+\$([\d.]+)", section)
         annual_div_m = re.search(
             r"\*\*預估年配息（總）\*\*:\s+\$([\d,.-]+)", section)
@@ -108,6 +114,8 @@ def extract_portfolio_summary(md_text: str) -> str:
         rows.append({
             "ticker": ticker, "tier": tier, "emoji": emoji,
             "pl_pct": pl_pct, "pl_emoji": pl_emoji,
+            "currency": currency, "sym": sym,
+            "flag": "🇹🇼" if currency == "TWD" else "🇺🇸",
             "price": price_m.group(1) if price_m else "?",
             "shares": shares_m.group(1) if shares_m else "?",
             "cost": cost_m.group(1) if cost_m else "?",
@@ -129,7 +137,9 @@ def extract_portfolio_summary(md_text: str) -> str:
     if not rows:
         return f"<p>{summary.replace(chr(10), '<br>')}</p>"
 
-    # Render — split into two tables for readability
+    # Render — sort: USD first, then TWD; within each, by P/L descending
+    rows.sort(key=lambda r: (r["currency"] != "USD", -float(r["pl_pct"] or 0)))
+
     trs_pl = []
     trs_div = []
     trs_target = []
@@ -139,6 +149,7 @@ def extract_portfolio_summary(md_text: str) -> str:
         except ValueError:
             pl_float = 0
         cls = "pos" if pl_float >= 0 else "neg"
+        sym = r["sym"]
 
         try:
             upside_float = float(r["upside"])
@@ -146,37 +157,40 @@ def extract_portfolio_summary(md_text: str) -> str:
         except ValueError:
             ucls = ""
 
-        # Table 1: P/L
+        # Table 1: P/L (currency-aware)
         trs_pl.append(f"""
         <tr>
+          <td>{r['flag']}</td>
           <td class="ticker">{r['ticker']}</td>
           <td class="tier-{r['tier']}">{r['emoji']} {r['tier']}</td>
           <td>{r['shares']} sh</td>
-          <td>${r['cost']}</td>
-          <td>${r['price']}</td>
-          <td>${r['value']}</td>
-          <td class="{cls}">{r['pl_dollar']}$</td>
+          <td>{sym}{r['cost']}</td>
+          <td>{sym}{r['price']}</td>
+          <td>{sym}{r['value']}</td>
+          <td class="{cls}">{r['pl_dollar']} {sym}</td>
           <td class="{cls}"><strong>{r['pl_pct']}%</strong></td>
         </tr>""")
 
-        # Table 2: Dividend
+        # Table 2: Dividend (currency-aware)
         trs_div.append(f"""
         <tr>
+          <td>{r['flag']}</td>
           <td class="ticker">{r['ticker']}</td>
-          <td>${r['latest_div_per_share']}</td>
+          <td>{sym}{r['latest_div_per_share']}</td>
           <td>{r['frequency']}</td>
-          <td>${r['annual_div_total']}</td>
+          <td>{sym}{r['annual_div_total']}</td>
           <td>{r['yield_pct']}%</td>
         </tr>""")
 
-        # Table 3: Targets / Fair Value
+        # Table 3: Targets / Fair Value (currency-aware)
         trs_target.append(f"""
         <tr>
+          <td>{r['flag']}</td>
           <td class="ticker">{r['ticker']}</td>
-          <td>${r['price']}</td>
-          <td>${r['target']}</td>
+          <td>{sym}{r['price']}</td>
+          <td>{sym}{r['target']}</td>
           <td class="{ucls}"><strong>{r['upside']}%</strong></td>
-          <td>${r['fair_value']}</td>
+          <td>{sym}{r['fair_value']}</td>
           <td>{r['fair_upside']}%</td>
           <td>{r['fwd_pe']}</td>
           <td>{r['rec'].upper()}</td>
@@ -189,9 +203,9 @@ def extract_portfolio_summary(md_text: str) -> str:
     <table>
       <thead>
         <tr>
-          <th>Ticker</th><th>建議</th><th>持股</th>
+          <th></th><th>Ticker</th><th>建議</th><th>持股</th>
           <th>成本</th><th>現價</th><th>現值</th>
-          <th>價差 $</th><th>價差 %</th>
+          <th>價差</th><th>價差 %</th>
         </tr>
       </thead>
       <tbody>{''.join(trs_pl)}</tbody>
@@ -201,7 +215,7 @@ def extract_portfolio_summary(md_text: str) -> str:
     <table>
       <thead>
         <tr>
-          <th>Ticker</th>
+          <th></th><th>Ticker</th>
           <th>每股（最近）</th><th>頻率</th><th>預估年配息</th><th>殖利率</th>
         </tr>
       </thead>
@@ -212,7 +226,7 @@ def extract_portfolio_summary(md_text: str) -> str:
     <table>
       <thead>
         <tr>
-          <th>Ticker</th><th>現價</th>
+          <th></th><th>Ticker</th><th>現價</th>
           <th>目標價</th><th>Upside</th>
           <th>Fair Value</th><th>FV vs 現價</th>
           <th>Forward P/E</th><th>評等</th>
@@ -291,6 +305,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <h1>🦞 Scout Daily Briefing</h1>
 <div class="sub">{date} · 自動產生 · 非投資建議</div>
 
+{indices_card}
 {portfolio_block_card}
 <div class="card">
   <h2>📡 監看清單建議</h2>
@@ -424,6 +439,18 @@ def main():
   {portfolio_summary_html}
 </div>""" if portfolio_summary_html else "")
 
+    # Major indices card
+    try:
+        from scout.indices import get_all_indices, render_indices_html
+        indices_data = get_all_indices()
+        indices_html = render_indices_html(indices_data)
+        indices_card = (f"""<div class="card">
+  <h2>📈 主要指數</h2>
+  {indices_html}
+</div>""" if indices_html else "")
+    except Exception as e:
+        indices_card = ""
+
     portfolio_details = (f"""<details>
   <summary>📊 完整投組報告 (portfolio)</summary>
   <div class="md" id="portfolio-md"></div>
@@ -436,6 +463,7 @@ document.getElementById('portfolio-md').innerHTML = marked.parse({json.dumps(por
         date=date_str,
         time=datetime.now().strftime("%H:%M"),
         n_picks=len(picks),
+        indices_card=indices_card,
         portfolio_block_card=portfolio_card,
         watch_table=build_watch_table(watch_items),
         picks_table=build_picks_table(picks),

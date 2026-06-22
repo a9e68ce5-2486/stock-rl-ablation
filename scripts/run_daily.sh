@@ -82,13 +82,15 @@ fi
     echo "✅ Done at $(date +%H:%M:%S)"
 } >> "$LOG_FILE" 2>&1
 
-# Auto-open the HTML briefing in default browser (only if user is logged in / awake)
+# Auto-open the HTML briefing in Google Chrome (only if user logged in)
 if [ "${BRIEFING_OK:-0}" = "1" ]; then
     BRIEFING_FILE="$REPORT_DIR/briefing_${DATE}.html"
     if [ -f "$BRIEFING_FILE" ]; then
-        # Only open if there's an active user session (not just a launchd-only context)
         if pgrep -x Finder >/dev/null 2>&1; then
-            open "$BRIEFING_FILE" 2>/dev/null || true
+            # Try Chrome first, fall back to default browser
+            open -a "Google Chrome" "$BRIEFING_FILE" 2>/dev/null \
+                || open "$BRIEFING_FILE" 2>/dev/null \
+                || true
         fi
     fi
 fi

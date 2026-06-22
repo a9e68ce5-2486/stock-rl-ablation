@@ -12,11 +12,19 @@ from typing import List
 
 # Map ticker → sector ETF (best representative for that ticker's sector)
 SECTOR_ETF = {
-    # Semiconductors / Chips
+    # Semiconductors / Chips (US + TW)
     **{t: "SMH" for t in [
         "MU", "AMD", "MRVL", "ON", "AVGO", "QCOM", "LSCC", "MCHP", "MPWR",
         "AMAT", "LRCX", "KLAC", "AMKR", "CRUS", "POWI", "SWKS", "QRVO",
         "INTC", "ACMR", "WDC", "STX", "NVDA", "TSM", "ASML", "ARM",
+        # TW semiconductors
+        "2330.TW",  # TSMC
+        "2454.TW",  # MediaTek 聯發科
+        "2327.TW",  # Yageo 國巨 (passive components)
+    ]},
+    # TW electronics manufacturing
+    **{t: "XLI" for t in [
+        "2317.TW",  # Hon Hai / Foxconn 鴻海
     ]},
     # Optical / Network / Communication
     **{t: "PAVE" for t in ["LITE", "CIEN", "INFN", "ANET", "NTGR"]},

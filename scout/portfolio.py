@@ -54,6 +54,18 @@ from scout.events import get_events, events_to_bullets
 from scout.analyst_targets import get_targets_snapshot, render_targets_bullets
 from scout.sector_news import get_sector_etf
 from scout.portfolio_log import append_daily_snapshot
+from scout.indices import get_all_indices, render_indices_table_md
+
+
+def get_twd_to_usd_rate() -> float:
+    """yfinance TWD=X returns TWD per USD (e.g. 30.58). Return inverse for TWD→USD."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker("TWD=X").history(period="5d")
+        twd_per_usd = float(hist["Close"].iloc[-1])
+        return 1 / twd_per_usd if twd_per_usd else 0.0327
+    except Exception:
+        return 0.0327  # fallback ≈ 1 USD = 30.58 TWD
 
 
 POSITIONS_PATH = PROJECT_ROOT / "results" / "positions.json"
@@ -81,24 +93,22 @@ POSITIONS_TEMPLATE = {
 }
 
 
-def load_positions() -> tuple[list[dict], float]:
-    """Returns (positions, cash_usd)."""
+def load_positions() -> tuple[list[dict], float, float]:
+    """Returns (positions, cash_usd, cash_twd)."""
     if not POSITIONS_PATH.exists():
-        return [], 0.0
+        return [], 0.0, 0.0
     try:
         data = json.loads(POSITIONS_PATH.read_text())
-        return data.get("positions", []), float(data.get("cash_usd", 0))
+        return (data.get("positions", []),
+                float(data.get("cash_usd", 0)),
+                float(data.get("cash_twd", 0)))
     except Exception as e:
         print(f"⚠️  positions.json parse error: {e}")
-        return [], 0.0
+        return [], 0.0, 0.0
 
 
 def aggregate_by_ticker(positions: list[dict]) -> list[dict]:
-    """Combine multiple lots of same ticker into one aggregated position.
-
-    Returns a list of dicts each with: ticker, total_shares, weighted_avg_cost,
-    earliest_purchase_date, lots (list of original entries).
-    """
+    """Combine multiple lots of same ticker. Preserves currency."""
     by_t = {}
     for p in positions:
         t = p["ticker"]
@@ -108,6 +118,7 @@ def aggregate_by_ticker(positions: list[dict]) -> list[dict]:
                 "shares": 0.0,
                 "total_cost": 0.0,
                 "lots": [],
+                "currency": p.get("currency", "USD"),
             }
         agg = by_t[t]
         s = float(p.get("shares", 0))
@@ -119,10 +130,6 @@ def aggregate_by_ticker(positions: list[dict]) -> list[dict]:
     out = []
     for agg in by_t.values():
         agg["avg_cost"] = (agg["total_cost"] / agg["shares"]) if agg["shares"] else 0
-        dates = [p.get("purchase_date") for p in agg["lots"]
-                 if p.get("purchase_date")]
-        agg["purchase_date"] = min(dates) if dates else None
-        # Aggregate notes
         notes = [p.get("notes", "") for p in agg["lots"] if p.get("notes")]
         agg["notes"] = " | ".join(notes) if notes else ""
         out.append(agg)
@@ -243,44 +250,87 @@ def compute_position_stats(pos: dict, history: pd.DataFrame) -> dict:
         "lots": pos.get("lots", []),
         "div_snapshot": div_snap,
         "targets": targets_snap,
+        "currency": pos.get("currency", "USD"),
     }
 
 
-def render_portfolio_summary(stats_list: list[dict], cash_usd: float = 0) -> str:
-    """Total portfolio value (incl. cash), capital P/L, est. annual dividend."""
-    if not stats_list and cash_usd <= 0:
+def render_portfolio_summary(stats_list: list[dict], cash_usd: float = 0,
+                              cash_twd: float = 0,
+                              twd_to_usd: float = 0.0327) -> str:
+    """Total portfolio value grouped by currency, combined in USD."""
+    if not stats_list and cash_usd <= 0 and cash_twd <= 0:
         return "_(no positions)_"
 
-    total_equity_value = sum(s["current_value"] for s in stats_list)
-    total_cost = sum(s["cost_basis"] for s in stats_list)
-    total_pl = total_equity_value - total_cost
-    total_pl_pct = (total_pl / total_cost * 100) if total_cost else 0
-    total_annual_div = sum(s["est_annual_dividend"] for s in stats_list)
-    total_portfolio_value = total_equity_value + cash_usd
-    yield_on_cost = (total_annual_div / total_cost * 100) if total_cost else 0
+    # Group by currency
+    by_ccy = {}
+    for s in stats_list:
+        ccy = s.get("currency", "USD")
+        if ccy not in by_ccy:
+            by_ccy[ccy] = {"positions": [], "equity": 0, "cost": 0, "annual_div": 0}
+        b = by_ccy[ccy]
+        b["positions"].append(s)
+        b["equity"] += s["current_value"]
+        b["cost"] += s["cost_basis"]
+        b["annual_div"] += s["est_annual_dividend"]
 
-    sorted_pl = sorted(stats_list, key=lambda x: x["pl_pct"], reverse=True)
-    best = sorted_pl[0] if sorted_pl else None
-    worst = sorted_pl[-1] if len(sorted_pl) > 1 else None
+    # Add cash buckets
+    if cash_usd > 0:
+        by_ccy.setdefault("USD", {"positions": [], "equity": 0, "cost": 0, "annual_div": 0})
+    if cash_twd > 0:
+        by_ccy.setdefault("TWD", {"positions": [], "equity": 0, "cost": 0, "annual_div": 0})
 
     lines = []
-    lines.append(f"**總部位**: {len(stats_list)} 檔 + 現金 ${cash_usd:.2f}")
-    lines.append(f"**投組現值**: ${total_portfolio_value:,.2f} "
-                 f"(股票 ${total_equity_value:,.2f} + 現金 ${cash_usd:.2f})")
-    lines.append(f"**總成本**: ${total_cost:,.2f}")
-    pl_s = "+" if total_pl >= 0 else ""
-    lines.append(f"**未實現損益（價差）**: {pl_s}${total_pl:,.2f} "
-                 f"({pl_s}{total_pl_pct:.2f}%)")
-    lines.append(f"**預估年配息**: ${total_annual_div:,.2f} "
-                 f"(成本殖利率 {yield_on_cost:.2f}%)")
-    if best:
-        lines.append(f"\n**最佳**: {best['ticker']} "
-                     f"價差 {best['pl_pct']:+.1f}% "
-                     f"({best['pl_dollar']:+,.2f}$)")
-    if worst and worst != best:
-        lines.append(f"**最差**: {worst['ticker']} "
-                     f"價差 {worst['pl_pct']:+.1f}% "
-                     f"({worst['pl_dollar']:+,.2f}$)")
+    lines.append(f"**總部位**: {len(stats_list)} 檔 "
+                 f"(美股 {sum(1 for s in stats_list if s.get('currency','USD')=='USD')} + "
+                 f"台股 {sum(1 for s in stats_list if s.get('currency')=='TWD')})")
+    lines.append(f"**匯率**: 1 USD = {1/twd_to_usd:.2f} TWD")
+    lines.append("")
+
+    grand_total_usd = 0
+    grand_cost_usd = 0
+    for ccy in ("USD", "TWD"):
+        if ccy not in by_ccy:
+            continue
+        b = by_ccy[ccy]
+        if ccy == "USD":
+            cash = cash_usd
+            sym = "$"
+            equity_usd = b["equity"]
+            cost_usd = b["cost"]
+            cash_usd_eq = cash_usd
+        else:
+            cash = cash_twd
+            sym = "NT$"
+            equity_usd = b["equity"] * twd_to_usd
+            cost_usd = b["cost"] * twd_to_usd
+            cash_usd_eq = cash_twd * twd_to_usd
+        total_value = b["equity"] + cash
+        pl = b["equity"] - b["cost"]
+        pl_pct = (pl / b["cost"] * 100) if b["cost"] else 0
+        pl_s = "+" if pl >= 0 else ""
+        lines.append(f"### {('🇺🇸 美股' if ccy == 'USD' else '🇹🇼 台股')} ({ccy})")
+        lines.append(f"- **部位數**: {len(b['positions'])} 檔 + 現金 {sym}{cash:,.2f}")
+        lines.append(f"- **現值**: {sym}{total_value:,.2f}  "
+                     f"(股票 {sym}{b['equity']:,.2f} + 現金 {sym}{cash:,.2f})")
+        lines.append(f"- **成本**: {sym}{b['cost']:,.2f}")
+        lines.append(f"- **未實現損益**: {pl_s}{sym}{pl:,.2f} ({pl_s}{pl_pct:.2f}%)")
+        if ccy == "TWD":
+            lines.append(f"- **USD 等值**: ${equity_usd + cash_usd_eq:,.2f}  "
+                         f"(成本 ${cost_usd:,.2f})")
+        if b["annual_div"] > 0:
+            lines.append(f"- **預估年配息**: {sym}{b['annual_div']:,.2f}")
+        lines.append("")
+        grand_total_usd += equity_usd + cash_usd_eq
+        grand_cost_usd += cost_usd
+
+    grand_pl = grand_total_usd - grand_cost_usd
+    grand_pl_pct = (grand_pl / grand_cost_usd * 100) if grand_cost_usd else 0
+    pl_s = "+" if grand_pl >= 0 else ""
+    lines.append(f"### 💰 總計（USD）")
+    lines.append(f"- **總現值**: ${grand_total_usd:,.2f}")
+    lines.append(f"- **總成本**: ${grand_cost_usd:,.2f}")
+    lines.append(f"- **總損益**: {pl_s}${grand_pl:,.2f} ({pl_s}{grand_pl_pct:.2f}%)")
+
     return "\n".join(lines)
 
 
@@ -290,16 +340,19 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
                         earnings_summary: str, chart_block: str) -> list[str]:
     """Markdown for a single position."""
     pl_emoji = "🟢" if stats["pl_pct"] >= 0 else "🔴"
+    ccy = stats.get("currency", "USD")
+    sym = "NT$" if ccy == "TWD" else "$"
+    flag = "🇹🇼" if ccy == "TWD" else "🇺🇸"
     lines = []
-    lines.append(f"## {stats['ticker']}  {rec['emoji']} **{rec['label']}**  "
+    lines.append(f"## {flag} {stats['ticker']}  {rec['emoji']} **{rec['label']}**  "
                  f"({pl_emoji} {stats['pl_pct']:+.1f}%)")
 
     # Position facts
-    lines.append(f"**現價**: ${stats['current_price']:.2f}  "
+    lines.append(f"**現價**: {sym}{stats['current_price']:.2f}  "
                  f"|  **持股**: {stats['shares']:g}  "
-                 f"|  **加權均價**: ${stats['avg_cost']:.2f}  ")
-    lines.append(f"**現值**: ${stats['current_value']:,.2f}  "
-                 f"|  **價差損益**: {stats['pl_dollar']:+,.2f}$ "
+                 f"|  **加權均價**: {sym}{stats['avg_cost']:.2f}  ")
+    lines.append(f"**現值**: {sym}{stats['current_value']:,.2f}  "
+                 f"|  **價差損益**: {stats['pl_dollar']:+,.2f} {sym} "
                  f"({stats['pl_pct']:+.1f}%)  ")
     # 配息資訊（最近一次 + 預估年配息）
     snap = stats.get("div_snapshot", {})
@@ -430,18 +483,23 @@ def render_position_card(stats: dict, rec: dict, chart_bullets: list[str],
 
 
 def analyze_portfolio(out_path: Path, use_llm: bool = True):
-    raw_positions, cash_usd = load_positions()
-    if not raw_positions and cash_usd <= 0:
+    raw_positions, cash_usd, cash_twd = load_positions()
+    if not raw_positions and cash_usd <= 0 and cash_twd <= 0:
         print(f"⚠️  No positions found. Run with --init to create template.")
         return
 
-    # Combine multiple lots of same ticker
     aggregated = aggregate_by_ticker(raw_positions)
-    print(f"📂 Loaded {len(raw_positions)} lots → {len(aggregated)} unique tickers + "
-          f"cash ${cash_usd:.2f}")
+    n_us = sum(1 for p in aggregated if p.get("currency", "USD") == "USD")
+    n_tw = sum(1 for p in aggregated if p.get("currency") == "TWD")
+    print(f"📂 Loaded {len(raw_positions)} lots → {len(aggregated)} unique tickers "
+          f"({n_us} US + {n_tw} TW), cash ${cash_usd:.2f} USD + NT${cash_twd:.2f}")
 
-    print(f"📡 Fetching SPY benchmark...")
+    twd_to_usd = get_twd_to_usd_rate()
+    print(f"💱 TWD→USD rate: {twd_to_usd:.6f} (1 USD = {1/twd_to_usd:.2f} TWD)")
+
+    print(f"📡 Fetching SPY benchmark + indices...")
     spy_hist = fetch_history("SPY", days=400)
+    indices = get_all_indices()
 
     macro_data = {"brief": "", "indicators_formatted": ""}
     if use_llm:
@@ -502,7 +560,12 @@ def analyze_portfolio(out_path: Path, use_llm: bool = True):
     lines.append("⚠️ **以下為基於公開資料的技術分析，非投資建議。任何進出皆為使用者自行決定。**")
     lines.append("")
     lines.append("## 投組總覽")
-    lines.append(render_portfolio_summary(all_stats, cash_usd))
+    lines.append(render_portfolio_summary(all_stats, cash_usd, cash_twd, twd_to_usd))
+    lines.append("")
+    if indices:
+        lines.append("## 📈 主要指數")
+        lines.append(render_indices_table_md(indices))
+        lines.append("")
     lines.append("")
     if macro_data.get("brief") and not macro_data["brief"].startswith("("):
         lines.append("## 🌍 當前總體環境")
