@@ -461,7 +461,7 @@ document.getElementById('portfolio-md').innerHTML = marked.parse({json.dumps(por
 
     html = HTML_TEMPLATE.format(
         date=date_str,
-        time=datetime.now().strftime("%H:%M"),
+        time=datetime.now().strftime("%H:%M") + " 台灣時間",
         n_picks=len(picks),
         indices_card=indices_card,
         portfolio_block_card=portfolio_card,

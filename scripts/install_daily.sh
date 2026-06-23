@@ -43,7 +43,18 @@ LOG_DIR="$PROJECT_ROOT/results/daily_logs"
 chmod +x "$RUN_SCRIPT"
 mkdir -p "$LOG_DIR"
 
-# Generate plist with absolute paths
+# Check Mac is on Taiwan timezone (launchd uses Mac local time)
+CURRENT_TZ="$(readlink /etc/localtime | xargs basename)"
+if [ "$CURRENT_TZ" != "Taipei" ]; then
+    echo "⚠️  WARNING: Mac timezone is $CURRENT_TZ, not Asia/Taipei."
+    echo "   launchd uses Mac local time, so 09:00 might not be Taiwan 09:00."
+    echo "   Fix: System Settings → General → Date & Time → set to Taipei."
+    echo ""
+fi
+
+# Generate plist with absolute paths.
+# Note: launchd's StartCalendarInterval uses the Mac's local timezone.
+# We expect Asia/Taipei, so 09:00 below = 09:00 台灣時間.
 cat > "$PLIST_DEST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,6 +69,8 @@ cat > "$PLIST_DEST" <<EOF
         <string>${RUN_SCRIPT}</string>
     </array>
 
+    <!-- StartCalendarInterval uses Mac's LOCAL TIME (= Asia/Taipei). -->
+    <!-- ${HOUR}:${MINUTE} 為台灣時區 (Asia/Taipei). -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
@@ -84,11 +97,9 @@ cat > "$PLIST_DEST" <<EOF
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>${HOME}</string>
+        <key>TZ</key>
+        <string>Asia/Taipei</string>
     </dict>
-
-    <!-- Run when missed (laptop closed at scheduled time) -->
-    <key>StartCalendarIntervalCatchup</key>
-    <true/>
 </dict>
 </plist>
 EOF
@@ -102,9 +113,10 @@ launchctl unload "$PLIST_DEST" 2>/dev/null || true
 launchctl load "$PLIST_DEST"
 
 echo "✅ Loaded launchd job: $LABEL"
-echo "   Schedule       : every day at $(printf '%02d:%02d' "$HOUR" "$MINUTE")"
+echo "   Schedule       : 每天 $(printf '%02d:%02d' "$HOUR" "$MINUTE") (台灣時間 Asia/Taipei)"
 echo "   Logs           : $LOG_DIR/<date>.log"
 echo "   Stdout / stderr: $LOG_DIR/launchd.{out,err}"
+echo "   Mac timezone   : $CURRENT_TZ"
 echo ""
 
 # Show status

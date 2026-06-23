@@ -14,6 +14,9 @@ VENV_DIR="/Users/victor/Documents/GitHub/AI agent/stock-rl-env"
 WATCHLIST="NVDA AVGO TSM"   # edit to add/remove tickers
 TOP_K=5
 
+# Force Taipei timezone for all date/time operations
+export TZ="Asia/Taipei"
+
 # === Paths ===
 DATE="$(date +%Y-%m-%d)"
 TIME="$(date +%H:%M:%S)"
@@ -38,7 +41,7 @@ fi
 {
     echo ""
     echo "════════════════════════════════════════"
-    echo "🦞 Scout daily run — $DATE $TIME"
+    echo "🦞 Scout daily run — $DATE $TIME (台灣時間 Asia/Taipei)"
     echo "════════════════════════════════════════"
 
     echo ""
@@ -97,11 +100,12 @@ fi
 
 # === Notify ===
 if command -v osascript >/dev/null 2>&1; then
+    TIME_NOW="$(date +%H:%M) 台灣時間"
     if [ "${AGENT_OK:-0}" = "1" ] && [ "${WATCH_OK:-0}" = "1" ]; then
-        TITLE="🦞 Scout — Daily briefing ready"
-        MSG="$TOP_K picks + watchlist. Briefing opened in browser."
+        TITLE="🦞 Scout — Daily briefing ready ($TIME_NOW)"
+        MSG="$TOP_K picks + watchlist。已在 Chrome 開啟。"
     else
-        TITLE="🦞 Scout — Errors"
+        TITLE="🦞 Scout — Errors ($TIME_NOW)"
         MSG="See $LOG_FILE"
     fi
     osascript -e "display notification \"$MSG\" with title \"$TITLE\"" 2>/dev/null || true
